@@ -1,26 +1,30 @@
-san## INPUT FILE FOR FORS2 POLARIZATION REDUCTION 
+## INPUT FILE FOR FORS2 POLARIZATION REDUCTION 
 
 ######## BASICS #########################################################
-OBJECT: OTHER				#Type of object: possibilities are OTHER,STD or GAL
-TARGET: M30	                #Target name 
+OBJECT: GAL				#Type of object: possibilities are OTHER,STD or GAL
+TARGET: Full-Moon	                #Target name 
 DATE:				        #if a particular date within  the taget's folder (leave empty if none)
 
-LOGFILE: 		#Path+name of logfile for screen output 
+LOGFILE: 				#Path+name of logfile for screen output 
 OUTPUT: reduced				#Output folder: default is a folder names 'reduced' within target's folder
-FILTERS:   H_Alpha		#Filters to use: default is b_HIGH,v_HIGH,R_SPECIAL,I_BESS
+FILTERS:   v_HIGH			#Filters to use: default is b_HIGH,v_HIGH,R_SPECIAL,I_BESS
 
+OFFSETS:  None                           #Only certain of the offsets, ex: 0,3,4 (def: None=All)
+COMBOFFSET: Yes                          #Combine multiple offsets (Yes/No)
 
 ######## BIAS ############################################################
 BIAS: Yes				#Caculate master_bias and subtract to all images (yes/no)
+BIASDATE:       			#Particular date for bias
+					# (otherwise: from DATE, otherwise: from MJD of first file)
 
 ######## GAIN ANALYSIS ####################################################
 GAIN: No				#Do gain analysis Yes/no WARNING: NOT FINISHED
 
 ######## FLAT ####################################################
-FLAT: Yes				#Caculate flat from data (sum of all angles) and correct (yes/no)
+FLAT: No				#Caculate flat from data (sum of all angles) and correct (yes/no)
 
 ######## COSMIC RAYS ######################################################
-COSMIC: No				#If you want to do cosmic ray removal: Yes/No
+COSMIC: Yes				#If you want to do cosmic ray removal: Yes/No
 
 #######  STRIP POSITIONS ###############################################
 CALCSTRIPS: No				#Calculate strips positions interactively (otherwise use calculated default values)
@@ -29,19 +33,20 @@ DCOUNTDY: 1.0                        #Change in dflux/dy to get the strips (def:
 ####### MATCH ORDINARY/EXTRAORDINARY BEAMS WITH FCT: USE DAOPHOT FIND/MATCH STARS ##############
 FINDSTARS: No	  	 	 	#Find stars to get matching function (otherwise use calculated default function)
 FWHM: 5.0  				#Full width half maximum to use to find stars with daophot (photutils) --def:5.0
-THRESHOLD: 2.0 			#Number of sigma from the background to find stars with daophot(photutils) --def:5.0
+THRESHOLD: 2.0 				#Number of sigma from the background to find stars with daophot(photutils) --def:5.0
 
 ######## NOISE ########################################################
 NOISE_BOXSIZE: 50			#Box size (pix) to calculate noise (variance of background)   
 
 ######### PIX POL #######################################################
-PIXPOL: No				#If you want to do pol pixel by pixel: Yes/No
+PIXPOL: Yes				#If you want to do pol pixel by pixel: Yes/No
 
 ######### BIN POL #########################################################
-BINNING: No				#If you want to bin your image: Yes/No
+BINNING: Yes				#If you want to bin your image: Yes/No
 BINSIZE: 15				#Half size of the binning square (in pix)
 BINSIGMA: 2.0 				#Sigma values to do sigma clipping average when binning
-CENTER: 1025,1226			#If you want to center your binning at a given point (leave empty if none)
+CENTER: 1037,1155			#If you want to center your binning at a given point (leave empty if none) 
+        #1025,1226
 
 ######## PHOTOMETRY OF CENTRAL STAR #####################################
 STD-PHOTOMETRY: No			#If you want to do photometry of std star: Yes/No
@@ -51,12 +56,12 @@ APERRADIUS: 1.5852fwhm 	   	   	#Aperture radius to do photometry (leave empty t
 MAXRADIUS: 40				#Maximum radius (in pix) over which to do aperture photometry
 
 ######## PHOTOMETRY OF FIELD STARS #####################################
-FIELD-PHOTOMETRY: Yes			#If you want to do photometry of field stars: Yes/No
+FIELD-PHOTOMETRY: No			#If you want to do photometry of field stars: Yes/No
 	     				#To find stars, use of daophot: FWHM and THRESHOLD
 POSFREE: Yes				#If star positions are only found once and used thereafter (No)
 	 				# or found for each angle and matched later [PSF only] (Yes)
 DPIX: 1.0				#Delta of positions (x,y) in pix to match coordinates (if posfree)
-BKG:  Yes                                #Do background subtraction (def:Yes)
+BKG:  Yes                               #Do background subtraction (def:Yes)
 BBOX: 6				#Using IDL starfinder [PSF only] if set: background box size (int, def:6). If not set: -1
 
 ####### CHROMATISM/BIAS ####################################################
@@ -69,16 +74,19 @@ BIASMETHOD: P14			        #Polbias correction method: Wardel & Kronberg74 (WK74)
 FOURIER: No				#Do Fourier analysis: Yes/No	
 
 ####### INSTRUMENTAL POL #############################################
-CENPOL: med				#Correct for center polarization (def: None)
+CENPOL: none				#Correct for center polarization (def: None)
 	 				 # cen: by box center value
 					 # med: by median value
 					 # given: by given value... 
-INSTPOL: hyppar				#Correct for instrumental field polarization (def: None)
-	 				 # loadmap: use map in Information/FILT_instQ.fits
+INSTPOL: fithyppar		 #Correct for instrumental field polarization (def: None)
+					 # fithyppar: use instantaneous hyperbolic paraboloid fit
+					 # loadmap: use map in Information/FILT_instQ.fits
 					 # inla: use map in Information/FILT_inlaQ.fits
-					 # hyppar: use hyperbolic parabaloid fit in Information/hyppar_instQ/U.dat
+					 # hyppar: use previous hyperbolic parabaloid fit in Information/hyppar_instQ/U.dat
 
-####### OTHERS ####################################################
-RADFIT: No                              #Radial fit of Polarization
-PARFIT: Yes				#Paraboloid fit of Q,U (hyperbolic) and Polarization
+####### BACKGROUND MODEL FITS ####################################################
+RADFIT: No                              #Radial fit of Polarization (yes/no)
+PARFIT: No				#Paraboloid fit of Q,U (hyperbolic) and Polarization (Yes/no)
 INLA: No				#INLA fit (previously run)
+GALFIT:    ell                          #Mask galaxy for background fit via: 'circ','ell' (def: None) 
+GALFITRADIUS: 600		        #Radius (galfit='circ') around center defining region to be masked in paraboloid fits  (def: None)

@@ -1,4 +1,3 @@
-
 ## THIS FILE CONTAINS MULTIPLE ROUTINES USED FOR REDUCTION AND ANALYSIS OF ESO/FORS2/IPOL DATA
 ## Following is a list of the routines, a more general description can be found at the beginning
 ##  of each routine
@@ -47,6 +46,7 @@
 ## --------------------------------------------------------------------
 ## ---- ROUTINES FOR EXTENDED POLARIMETRY ----------------------------
 ## --------------------------------------------------------------------
+## GALISOPHOT: Function to do ellitpical isophot fits to galaxy image and obtain a mask to fit background
 ## GET_STRIPS: Function to obtain optimal strip offsets that divide ordinary/extraordin
 ## FIND_SHIFT: Function to obtain offsets between ordinary/extraordinary images
 ## FIND_STARS: Function to find stars in an image (DAOFIND)
@@ -95,9 +95,10 @@ home=os.path.expanduser('~')
 ## OUTPUT: This function does not return anything but writes output into a file
 ##         with savefile name ('...phot.dat') and creates a plot ('..phot.png')
 
-def write_photfile(savefile,ophot,ephot,erophot,erephot,phpol,erphpol):
+def write_photfile(savefile,ophot,ephot,erophot,erephot,phinfo):
 
-    pol,angle,Q,U,F = phpol
+    pol,angle,Q,U,F = phinfo['pol'],phinfo['angle'],phinfo['Q'],phinfo['U'],phinfo['fdiff']
+    erpol,erangle,erQ,erU,erF = phinfo['erpol'],phinfo['erangle'],phinfo['erQ'],phinfo['erU'],phinfo['erfdiff']
     erpol,erangle,erQ,erU,erF = erphpol
     photfile = open(savefile+'phot.dat','w')
     photfile.write("APERTURE PHOTOMETRY SUMMARY\n")
@@ -138,6 +139,7 @@ def write_photfile(savefile,ophot,ephot,erophot,erephot,phpol,erphpol):
     ax[2].set_xlabel('Angle HWP')
     ax[2].set_xticks(kangle)
     plt.savefig(savefile+'phot.png')
+    plt.close("all")
     
 ## --------------------------------------------------------------------
 ## ------------- FUNCTION TO CORRECT Q,U FOR CHROMATISM -------------
@@ -282,7 +284,7 @@ def erpolarization(beam,ebeam,poldeg,angle,radpix=40,savefile=None,method='WK74'
     return poldeg,erpoldeg,erangle
 
 ## ---------------------------------------------------------------------
-## ---------- FUNCTION TO CORRECT POLARIZTION BIAS --------------
+## ---------- FUNCTION TO CORRECT POLARIZATION BIAS --------------
 ## ---------------------------------------------------------------------
 ## PURPOSE: This function correct the polarization bias
 ## INPUT: 1. Pol degree
@@ -298,7 +300,7 @@ def polbias(poldeg,polerr,method='WK74',mask=None):
 
     if method == '': method = 'WK74'
     newpol = np.zeros(poldeg.shape,dtype=float)
-    newpol[:] = np.nan
+    newpol.fill(np.nan)
     if mask is None: mask = (poldeg > 0)
     
     if method == 'WK74':
@@ -334,9 +336,20 @@ def stokes(beam,ebeam,savefile=None,mask=None,emask=None,errbeam=None,errebeam=N
         if (os.path.isfile(savefile+'-QStokes.fits')):
             print("   Found existing QU files: %s" %(savefile+'-QStokes.fits'))
             qarr,uarr = fits.open(savefile+'-QStokes.fits'),fits.open(savefile+'-UStokes.fits')
-            Q,erQ = qarr[0].data
-            U,erU = uarr[0].data
-            return Q,U,erQ,erU
+            intarr = fits.open(savefile+'-intensity.fits')
+            fd,erfd = fits.open(savefile+'-Fdiff.fits'),fits.open(savefile+'-erFdiff.fits')         
+            af,eraf = fits.open(savefile+'-aFourier.fits'),fits.open(savefile+'-eraFourier.fits')
+            bf,erbf = fits.open(savefile+'-bFourier.fits'),fits.open(savefile+'-erbFourier.fits')
+           
+            #dictionary
+            stokes = {}
+            stokes['Q'],stokes['erQ'] = qarr[0].data
+            stokes['U'],stokes['erU'] = uarr[0].data
+            stokes['intensity'] = intarr[0].data 
+            stokes['fdiff'],stokes['erfdiff'] = fd[0].data,erfd[0].data
+            stokes['afourier'],stokes['erafourier'] = af[0].data,eraf[0].data
+            stokes['bfourier'],stokes['erbfourier'] = bf[0].data,erbf[0].data
+            return stokes
 
     ndim = np.ndim(beam[0])
     if ndim > 1: (ypix,xpix) = np.shape(beam[0])
@@ -406,14 +419,24 @@ def stokes(beam,ebeam,savefile=None,mask=None,emask=None,errbeam=None,errebeam=N
         fits.writeto(savefile+'-aFourier.fits',afourier,clobber=True)
         fits.writeto(savefile+'-eraFourier.fits',erafourier,clobber=True)
         fits.writeto(savefile+'-bFourier.fits',bfourier,clobber=True)
-        fits.writeto(savefile+'-erbFourier.fits',bfourier,clobber=True)
+        fits.writeto(savefile+'-erbFourier.fits',erbfourier,clobber=True)
         fits.writeto(savefile+'-Fdiff.fits',fdiff,clobber=True)
         fits.writeto(savefile+'-erFdiff.fits',er_fdiff,clobber=True)
-    return q_stokes,u_stokes,er_q_stokes,er_u_stokes
 
-## ----------------------------------------------------------------------
-## ---------- FUNCTION TO CORRECT Q/U PARAMETERS FOR Q0/U0 AND PLOT -----
-## ----------------------------------------------------------------------
+    #dictionary
+    stokes = {}
+    stokes['Q'],stokes['U'] = q_stokes,u_stokes
+    stokes['erQ'],stokes['erU'] = er_q_stokes,er_u_stokes
+    stokes['intensity'] = intensity
+    stokes['fdiff'],stokes['erfdiff'] = fdiff,er_fdiff
+    stokes['afourier'],stokes['erafourier'] = afourier,erafourier
+    stokes['bfourier'],stokes['erbfourier'] = afourier,erbfourier      
+    return stokes
+
+
+## -------------------------------------------------------------------------------
+## -------- QUcorrect: FUNCTION TO CORRECT Q/U PARAMETERS FOR Q0/U0 AND PLOT -----
+## ------------------------------------------------------------------------------
 ## PURPOSE: Correct Q and U values for some Q0/U0 value either provided by user
 ##          and/or calculated at center or binned center position
 ## INPUT: 1. Q Stokes image
@@ -440,6 +463,7 @@ def stokes(beam,ebeam,savefile=None,mask=None,emask=None,errbeam=None,errebeam=N
 ##              'inla': loads INLA map from Information/FILTER_inlaQ/U.fits
 ##        - scatter: When plotting do scatter plot or 2d hist (def: False)
 ##        - parfit: see plotstokes
+##        - fitmask: mask to fit fct (see plotstokes)
 ##        - inla: see plotstokes
 ## OUTPUT:
 ##       Corrected Q/U
@@ -461,7 +485,7 @@ def erpolfct(Q,U,erQ,erU):
     return erpol,erang
         
 def QUcorrect(q_stokes,u_stokes,savefile=None,Q0=None,U0=None,filt=None,
-              x=None,y=None,parfit=False,inla=False,nx=2049,ny=2064,
+              x=None,y=None,parfit=False,inla=False,nx=2049,ny=2064,fitmask=None,
               scatter=False,center=None,corr='None',fcorr='None',mask=None,errQ=None,errU=None):
 
     (ypix,xpix) = np.shape(q_stokes)
@@ -570,11 +594,12 @@ def QUcorrect(q_stokes,u_stokes,savefile=None,Q0=None,U0=None,filt=None,
     
     ##-- Plot after central correction
     cencorr=''
-    if corr.lower() != 'none' and savefile is not None:
+    if (corr.lower() != 'none' or parfit) and savefile is not None:
         print("   Plotting QU center-corrected ")
-        cencorr="-corr"+corr
+        if corr.lower() != 'none': cencorr="-corr"+corr
         Qpeak,Upeak,Qmed,Umed = plotstokes(q_stokes,u_stokes,savefile=savefile+cencorr,x=x,y=y,filt=filt,
-                                           mask=mask,scatter=scatter,Q0=q0_stokes,U0=u0_stokes,parfit=parfit,
+                                           mask=mask,scatter=scatter,Q0=q0_stokes,U0=u0_stokes,
+                                           fitmask=fitmask,parfit=parfit,
                                            center=center,erQ0=er_q0_stokes,erU0=er_u0_stokes,inla=inla)
       
         fits.writeto(savefile+cencorr+'-QStokes.fits',
@@ -596,27 +621,40 @@ def QUcorrect(q_stokes,u_stokes,savefile=None,Q0=None,U0=None,filt=None,
         if filt is None:
              print("Error in QUcorrect: if you input fcorr, you need a filter")
              sys.exit(-1)
+
         if fcorr.lower() == 'loadmap':
             HQc,Qarr = read_fits(home+"/crisp/FORS2-POL/Information/"+filt+"_instQ.fits")
             HUc,Uarr = read_fits(home+"/crisp/FORS2-POL/Information/"+filt+"_instU.fits") 
             Qfcorr,erQfcorr = Qarr; Ufcorr,erUfcorr = Uarr
-        if fcorr.lower() == 'inla':
+
+        elif fcorr.lower() == 'inla':
             HQc,Qfcorr = read_fits(home+"/crisp/FORS2-POL/Information/"+filt+"_inlaQ.fits")
-            HUc,Ufcorr = read_fits(home+"/crisp/FORS2-POL/Information/"+filt+"_inlaU.fits") 
+            HUc,Ufcorr = read_fits(home+"/crisp/FORS2-POL/Information/"+filt+"_inlaU.fits")
+
+                       
         elif 'hyppar' in fcorr.lower():
             ccenter=[ny/2,nx/2] if center is None else center
             xm,ym = np.linspace(0,nx-1,nx), np.linspace(0,ny-1,ny)
             xx,yy = np.meshgrid(xm-ccenter[1],ym-ccenter[0])
             ax,ay = xx.reshape(-1),yy.reshape(-1)
-            tfile = home+"/crisp/FORS2-POL/Information/hypparab_instQU.dat"
-            usefilts = np.loadtxt(tfile,usecols=0,dtype=object)
-            allpars = np.loadtxt(tfile,usecols=(1,2,3,4,5,6,7,8,9,10))  
-            i = np.argwhere(np.array(usefilts) == filt).reshape(-1)[0]
             rothypparaboloid = lambda xy,a,b,theta,x0,y0:\
                                ((xy[0]-x0)*np.sin(theta)+(xy[1]-y0)*np.cos(theta))**2.0/b**2.0 - \
-                               ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0 
-            Qfcorr = rothypparaboloid((ax,ay),*allpars[i,0:5])
-            Ufcorr = rothypparaboloid((ax,ay),*allpars[i,5:10])
+                               ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0
+            crothypparaboloid = lambda xy,a,b,theta,x0,y0,cst:\
+                               ((xy[0]-x0)*np.sin(theta)+(xy[1]-y0)*np.cos(theta))**2.0/b**2.0 - \
+                               ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0 + cst
+            if fcorr.lower() == 'hyppar':
+                tfile = home+"/crisp/FORS2-POL/Information/hypparab_instQU.dat"
+                usefilts = np.loadtxt(tfile,usecols=0,dtype=object)
+                allpars = np.loadtxt(tfile,usecols=(1,2,3,4,5,6,7,8,9,10))
+                i = np.argwhere(np.array(usefilts) == filt).reshape(-1)[0]
+                Qpars,Upars = allpars[i,0:5],allpars[i,5:10]
+            else:
+                Qpars,erQpars = np.loadtxt(savefile+cencorr+'-Qmodel.dat')
+                Upars,erUpars = np.loadtxt(savefile+cencorr+'-Umodel.dat')
+                    
+            Qfcorr = crothypparaboloid((ax,ay),*Qpars)
+            Ufcorr = crothypparaboloid((ax,ay),*Upars)
             Qfcorr,Ufcorr = Qfcorr.reshape((ny,nx)),Ufcorr.reshape((ny,nx)) 
 
         
@@ -714,9 +752,9 @@ def QUpolarization(q_stokes,u_stokes,filt,savefile=None,chrom=True,mask=None,ema
     ##-- Error in pol, angle: propagation: USING NOW SNR IN ERPOLARIZATION 
     if errQ is not None:
         errQ,errU = np.sqrt(errQ),np.sqrt(errU)
-    #    erpoldeg = np.sqrt((q_stokes**2*er_q_stokes**2+u_stokes**2*er_u_stokes**2)/
-    #                       (q_stokes**2+u_stokes**2))
-    #    erangle = 0.5*np.sqrt((q_stokes*er_u_stokes)**2+(u_stokes*er_q_stokes)**2)/((1+(u_stokes/q_stokes)**2)*q_stokes**2)
+        erpoldeg = np.sqrt((q_stokes**2*errQ**2+u_stokes**2*errU**2)/
+                           (q_stokes**2+u_stokes**2))
+        erangle = 0.5*np.sqrt((q_stokes*errU)**2+(u_stokes*errQ)**2)/((1+(u_stokes/q_stokes)**2)*q_stokes**2)
 
 
     ##-- Before pol dictionary
@@ -735,6 +773,9 @@ def QUpolarization(q_stokes,u_stokes,filt,savefile=None,chrom=True,mask=None,ema
     if savefile is not None:
         fits.writeto(savefile+'-pol.fits',poldeg,clobber=True)
         fits.writeto(savefile+'-angle.fits',angle,clobber=True)
+        if errQ is not None:
+            fits.writeto(savefile+'-erpol0.fits',erpoldeg,clobber=True)
+            fits.writeto(savefile+'-erangle0.fits',erangle,clobber=True)
         #with open(savefile+'-pol.pkl', 'w') as f: #python3: 'wb'
         #    pickle.dump(pol, f)
         
@@ -920,26 +961,35 @@ def compare_polangle(pol1,ang1,pol2,ang2,savefile,xtit='QU',ytit='F',mask=None):
 ##        -center: if passed (and scatter True), then plots y position as colormap
 ##        -parfit: Perfom hyperbolic paraboloid fit to Q and U maps
 ##        -inla: Plot inla (read from Information folder) and residuals (need filter)
+##        -fitmask: Only fit data outside this mask - def: None (all)
 ## OUTPUT: Nothing is returned but plots are created with savefile name and
 ##          extension: '..-QUplane.png','-Q.png',-U.png'
 
 def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
                Q0=None,U0=None,mask=None,erQ=None,erU=None,erQ0=None,erU0=None,
-               parfit=False,inla=False,filt=None):
+               parfit=False,fitmask=None,inla=False,filt=None):
     
-    ##Mask
-    if mask is None:
-        mask =  np.isfinite(Q) & np.isfinite(U) & (Q != 0) & (U != 0)
-
+          
     ##basic (for fit mostly)
     ny,nx = np.shape(Q)
     ccenter=[ny/2,nx/2] if center is None else center
     xm,ym = np.linspace(0,nx-1,nx), np.linspace(0,ny-1,ny)
     xx,yy = np.meshgrid(xm-ccenter[1],ym-ccenter[0])
+    rr = np.sqrt(xx**2.0+yy**2.0)    
     axx,ayy,allQ,allU = xx.reshape(-1),yy.reshape(-1),Q.reshape(-1),U.reshape(-1)
     if erQ is not None: allerQ,allerU = erQ.reshape(-1),erU.reshape(-1)
     else: allerQ,allerU = np.full(np.shape(allQ),0.0001),np.full(np.shape(allU),0.0001)
-    ind = mask.reshape(-1)
+    
+    ##Mask
+    if mask is None:
+        mask =  np.isfinite(Q) & np.isfinite(U) & (Q != 0) & (U != 0)
+    if fitmask is not None:
+        fitmask = (mask) & (~fitmask)
+        dofitmask = True
+    else:
+        fitmask = mask.copy()
+        dofitmask = False
+    ind = fitmask.reshape(-1)
     
     ##QU plane
     fs = 18
@@ -1040,12 +1090,19 @@ def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
         from scipy import optimize
         from mpl_toolkits.axes_grid1 import make_axes_locatable
         
-        #- rotated yperbolic paraboloid
+        #- rotated hyperbolic paraboloid
         rothypparaboloid = lambda xy,a,b,theta,x0,y0:\
                            ((xy[0]-x0)*np.sin(theta)+(xy[1]-y0)*np.cos(theta))**2.0/b**2.0 - \
-                           ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0 
+                           ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0  
         p0 = [1.0,1.0,0.0,0.0,0.0]
-        ## Q
+
+        #- rotated hyperbolic paraboloid with center value
+        crothypparaboloid = lambda xy,a,b,theta,x0,y0,cst:\
+                              ((xy[0]-x0)*np.sin(theta)+(xy[1]-y0)*np.cos(theta))**2.0/b**2.0 - \
+                              ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0 + cst 
+        cp0 = [1.0,1.0,0.0,0.0,0.0,0.0]
+        
+        ## --------- Q
         try: 
             fitQhpars,fitQhpcov = optimize.curve_fit(rothypparaboloid,(fx,fy),fQ,p0=p0,sigma=ferQ)
             fitQerhpars = np.sqrt(np.diag(fitQhpcov))
@@ -1061,11 +1118,32 @@ def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
         medQhpres = np.median(resQhp[mask])
         stdQhpres = np.median(np.abs(resQhp[mask]-medQhpres))
         print("      Residual median/MAD Q: %.4e,%.4e" %(medQhpres,stdQhpres))
-        fits.writeto(savefile+'-Qmodel.fits',Qhp,clobber=True) 
-        np.savetxt(savefile+'-Qmodel.dat',(fitQhpars,fitQerhpars),fmt='%8e',
-                   header='RotHyperParaboloid fit Q parameters\nResidual median/MAD Q: %.4e %.4e'
-                   %(medQhpres,stdQhpres))
-  
+
+   
+        try: 
+            fitcQhpars,fitcQhpcov = optimize.curve_fit(crothypparaboloid,(fx,fy),fQ,
+                                                       p0=cp0,sigma=ferQ)
+            fitcQerhpars = np.sqrt(np.diag(fitcQhpcov))
+        except:
+            fitcQhpars,fitcQerhpars = cp0,np.zeros(len(cp0))*np.nan
+        cQhparr = crothypparaboloid((axx,ayy),*fitcQhpars)
+        cQhp = cQhparr.reshape((ny,nx))
+        rescQhp = Q - cQhp
+        print("      CstRotHyperParaboloid fit parameters Q: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitcQhpars[0],fitcQhpars[1],fitcQhpars[2],fitcQhpars[3],fitcQhpars[4],fitcQhpars[5]))
+        print("      CstRotHyperParaboloid fit error parameters Q: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitcQerhpars[0],fitcQerhpars[1],fitcQerhpars[2],fitcQerhpars[3],fitcQerhpars[4],fitcQerhpars[5]))
+        medcQhpres = np.median(rescQhp[mask])
+        stdcQhpres = np.median(np.abs(rescQhp[mask]-medcQhpres))
+        print("      Residual median/MAD Q: %.4e,%.4e" %(medcQhpres,stdcQhpres))
+
+        fits.writeto(savefile+'-Qmodel.fits',cQhp,clobber=True) 
+        np.savetxt(savefile+'-Qmodel.dat',(fitcQhpars,fitcQerhpars),fmt='%8e',
+                   header='CstRotHyperParaboloid fit Q parameters\nResidual median/MAD Q: %.4e %.4e'
+                   %(medcQhpres,stdcQhpres))
+        
+        
+        ## --------- U
         try:
             fitUhpars,fitUhpcov = optimize.curve_fit(rothypparaboloid,(fx,fy),fU,p0=p0,sigma=ferU)
             fitUerhpars = np.sqrt(np.diag(fitUhpcov))
@@ -1081,11 +1159,29 @@ def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
         medUhpres = np.median(resUhp[mask])
         stdUhpres = np.median(np.abs(resUhp[mask]-medUhpres))
         print("      Residual median/MAD U: %.4e,%.4e" %(medUhpres,stdUhpres)) 
-        fits.writeto(savefile+'-Umodel.fits',Uhp,clobber=True) 
-        np.savetxt(savefile+'-Umodel.dat',(fitUhpars,fitUerhpars),fmt='%8e',
-                   header='RotHyperParaboloid fit U parameters\nResidual median/MAD U: %.4e %.4e'
-                   %(medUhpres,stdUhpres))
-                
+        
+        try: 
+            fitcUhpars,fitcUhpcov = optimize.curve_fit(crothypparaboloid,(fx,fy),fU,p0=cp0,sigma=ferU)
+            fitcUerhpars = np.sqrt(np.diag(fitcUhpcov))
+        except:
+            fitcUhpars,fitcUerhpars = cp0,np.zeros(len(cp0))*np.nan
+        cUhparr = crothypparaboloid((axx,ayy),*fitcUhpars)
+        cUhp = cUhparr.reshape((ny,nx))
+        rescUhp = U - cUhp
+        print("      CstRotHyperParaboloid fit parameters U: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitcUhpars[0],fitcUhpars[1],fitcUhpars[2],fitcUhpars[3],fitcUhpars[4],fitcUhpars[5]))
+        print("      CstRotHyperParaboloid fit error parameters U: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitcUerhpars[0],fitcUerhpars[1],fitcUerhpars[2],fitcUerhpars[3],fitcUerhpars[4],fitcUerhpars[5]))
+        medcUhpres = np.median(rescUhp[mask])
+        stdcUhpres = np.median(np.abs(rescUhp[mask]-medcUhpres))
+        print("      Residual median/MAD U: %.4e,%.4e" %(medcUhpres,stdcUhpres))
+
+        fits.writeto(savefile+'-Umodel.fits',cUhp,clobber=True) 
+        np.savetxt(savefile+'-Umodel.dat',(fitcUhpars,fitcUerhpars),fmt='%8e',
+                   header='CstRotHyperParaboloid fit U parameters\nResidual median/MAD U: %.4e %.4e'
+                   %(medcUhpres,stdcUhpres))
+
+        
         ## PLOT model and residual
         fs = 8
         
@@ -1097,19 +1193,20 @@ def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
         else:
             im1 = ax[0].scatter(x[mask],y[mask],c=Q[mask],
                            norm=cm.colors.Normalize(vmax=upQ,vmin=loQ),s=3)
+        if dofitmask: ax[0].imshow(~fitmask, cmap='binary', alpha=0.4)
         ax[0].set_ylabel('y [pix]',fontsize=fs)
         ax[0].invert_yaxis()        
         ax[0].text(0.70, 0.1, 'Q map', horizontalalignment='center',fontsize=fs,
                    verticalalignment='center', transform=ax[0].transAxes)
         ax[0].tick_params(labelsize=fs-2)
-        im2 = ax[1].imshow(Qhp,clim=(loQ,upQ),cmap='rainbow')
+        im2 = ax[1].imshow(cQhp,clim=(loQ,upQ),cmap='rainbow')
         ax[1].set_ylabel('y [pix]',fontsize=fs)
         ax[1].invert_yaxis()
         ax[1].text(0.60, 0.1, 'Rotated HyperParaboloid', horizontalalignment='center',fontsize=fs,
                      verticalalignment='center', transform=ax[1].transAxes)
         ax[1].tick_params(labelsize=fs-2)
-        lorQ,uprQ = np.percentile(resQhp[mask],5),np.percentile(resQhp[mask],95)
-        imres = ax[2].imshow(resQhp,clim=(lorQ,uprQ),cmap='binary')
+        lorQ,uprQ = np.percentile(rescQhp[mask],5),np.percentile(rescQhp[mask],95)
+        imres = ax[2].imshow(rescQhp,clim=(lorQ,uprQ),cmap='binary')
         ax[2].set_ylabel('y [pix]',fontsize=fs)
         ax[2].set_xlabel('x [pix]',fontsize=fs)
         ax[2].invert_yaxis()
@@ -1138,19 +1235,20 @@ def plotstokes(Q,U,savefile=None,scatter=False,center=None,x=None,y=None,
         else:
             im1 = ax[0].scatter(x[mask],y[mask],c=U[mask],
                            norm=cm.colors.Normalize(vmax=upU,vmin=loU),s=3)
+        if dofitmask: ax[0].imshow(~fitmask, cmap='binary', alpha=0.4)
         ax[0].set_ylabel('y [pix]',fontsize=fs)
         ax[0].invert_yaxis()        
         ax[0].text(0.70, 0.1, 'U map', horizontalalignment='center',fontsize=fs,
                    verticalalignment='center', transform=ax[0].transAxes)
         ax[0].tick_params(labelsize=fs-2)
-        im2 = ax[1].imshow(Uhp,clim=(loQ,upQ),cmap='rainbow')
+        im2 = ax[1].imshow(cUhp,clim=(loU,upU),cmap='rainbow')
         ax[1].set_ylabel('y [pix]',fontsize=fs)
         ax[1].invert_yaxis()
         ax[1].text(0.60, 0.1, 'Rotated HyperParaboloid', horizontalalignment='center',fontsize=fs,
                      verticalalignment='center', transform=ax[1].transAxes)
-        lorU,uprU = np.percentile(resUhp[mask],5),np.percentile(resUhp[mask],95)
+        lorU,uprU = np.percentile(rescUhp[mask],5),np.percentile(rescUhp[mask],95)
         ax[1].tick_params(labelsize=fs-2)
-        imres = ax[2].imshow(resUhp,clim=(lorU,uprU),cmap='binary')
+        imres = ax[2].imshow(rescUhp,clim=(lorU,uprU),cmap='binary')
         ax[2].set_ylabel('y [pix]',fontsize=fs)
         ax[2].set_xlabel('x [pix]',fontsize=fs)
         ax[2].invert_yaxis()
@@ -1391,11 +1489,12 @@ def xyplotpol(x,y,pol,angle,center=None,savefile=None,mask=None):
 ##        -step: pixel size of window in case of doing binning
 ##        -center: center of map where to start if doing binning
 ##        -savefile: path+basic-file name where to save results
+##        -fitradius: to plot zoom-in of region inside this radius
 ## OUTPUT: Nothing is returned but plots are created with savefile name and
 ##          extension ('..-pol.png', '..-angle.png', '..pol-angle.png')
 
-def plotpol(pol,angle,erpol=None,erangle=None,image=None,
-            step=7,center=None,savefile=None,x=None,y=None):
+def plotpol(pol,angle,erpol=None,erangle=None,image=None,polrange=None,
+            step=7,center=None,savefile=None,x=None,y=None,fitradius=None):
 
     print("   Plotting pol/angle maps ")
     #CONTOURS!
@@ -1414,8 +1513,12 @@ def plotpol(pol,angle,erpol=None,erangle=None,image=None,
     img = pol#np.arcsinh(pol)
     timg = np.copy(img[:,xi:xf])
     timg[timg == 0] = np.nan
-    lo = np.percentile(timg[np.isfinite(timg)].flatten(), 5)
-    up = np.percentile(timg[np.isfinite(timg)].flatten(), 95)
+    if polrange is None:
+        lo = np.percentile(timg[np.isfinite(timg)].flatten(), 5)
+        up = np.percentile(timg[np.isfinite(timg)].flatten(), 95)
+    else:
+        lo,up = polrange[0],polrange[1]
+        
     c = ax.imshow(img,clim=(lo,up),cmap='rainbow')
     ax.set_xlabel('x [pix]',fontsize=fs)
     ax.set_ylabel('y [pix]',fontsize=fs)
@@ -1504,9 +1607,49 @@ def plotpol(pol,angle,erpol=None,erangle=None,image=None,
     ax.quiver(x[xymask],y[xymask],u[xymask],v[xymask],color='black',
               headlength=0, pivot='middle', scale=3, linewidth=3.5, units='xy', angles='uv',
               width=3.0, alpha= 1.0, headwidth=1,headaxislength=0)
+    ax.set_ylim(ax.get_ylim()[::-1])#ax.invert_yaxis()#
+    fig.savefig(savefile+'-pol-angle.png')
+    
+    ##Within fitradius
+    if fitradius is not None:
+        fr = int(fitradius)
+        subpol = pol[center[1]-fr:center[1]+fr,center[0]-fr:center[0]+fr]
+        subvals = sigma_clip(subpol[np.isfinite(subpol) & (subpol >0)],sigma=4.0)
+        sscale = step/subvals.max()*2
+        subu,subv = u/scale*sscale,v/scale*sscale
+        
+        fig,ax = plt.subplots(1,figsize=(9,9))
+        if image is not None:
+            subimg = image[center[1]-fr:center[1]+fr,center[0]-fr:center[0]+fr]
+            slo = np.percentile(subimg[np.isfinite(subimg)].flatten(), 5)
+            sup = np.percentile(subimg[np.isfinite(subimg)].flatten(), 99.5)
+            ax.imshow(img,clim=(slo,sup))
+        ax.set_xlabel('x [pix]')
+        ax.set_ylabel('y [pix]')
+        ax.set_xlim([center[0]-fr,center[0]+fr])
+        ax.set_ylim([center[1]-fr,center[1]+fr])
+        ax.quiver(x[xymask],y[xymask],subu[xymask],subv[xymask],color='black',
+                  headlength=0, pivot='middle', scale=3, linewidth=3.5, units='xy', angles='uv',
+                  width=1.5, alpha= 1.0, headwidth=1,headaxislength=0)
+        ax.set_ylim(ax.get_ylim()[::-1])
+        fig.savefig(savefile+'-sub-pol-angle.png')
+
+    
+    fig,ax = plt.subplots(1,figsize=(9,9))
+    if image is not None:
+        img = image
+        lo = np.percentile(img[np.isfinite(img)].flatten(), 5)
+        up = np.percentile(img[np.isfinite(img)].flatten(), 99.5)
+        ax.imshow(img,clim=(lo,up))
+    ax.set_xlabel('x [pix]')
+    ax.set_ylabel('y [pix]')
+    ax.quiver(x[xymask],y[xymask],u[xymask],v[xymask],color='black',
+              headlength=0, pivot='middle', scale=3, linewidth=3.5, units='xy', angles='uv',
+              width=3.0, alpha= 1.0, headwidth=1,headaxislength=0)
     ax.set_ylim(ax.get_ylim()[::-1])
     fig.savefig(savefile+'-pol-angle.png')
 
+    
     plt.close('all')
             
     ##-- generate length of lines based on maximum
@@ -1541,19 +1684,102 @@ def plotpol(pol,angle,erpol=None,erangle=None,image=None,
 ## -----------------------------------------------------------------------
 ## PURPOSE: simple median of different images
 ## INPUT: list of file names of images
-##        savefile
+##        savefile:    output combined file
+##        method  :    'median' (def),
+##                     'absmedian' (divide each img by its median)
+##                     'mean'
+##                     'weighted' (need errors) 
+## OPTIONAL INPUT:
+##        erfiles :    list of errfiles images
+##        erstd   :    include std into error
+##        align   :    Align images using center ra,dec
+##        RA,DEC  :    Center Ra and dec to align (def: use from header)
+##        
 
-def combine_images(files,savefile):
+def combine_images(files,savefile,method='median',erfiles=None,erstd=False,
+                   ra=None,dec=None,align=False,pixscale=0.126,binning=2):
 
+    ## see if file exists
+    if os.path.isfile(savefile):
+        print("   Found existing combined file %s" %savefile)
+        head,data = read_fits(savefile)
+        return data
+    
+    ## load images
+    allmed = np.zeros(len(files))
     for f in range(0,len(files)):
         head,data = read_fits(files[f])
+        erdata = None
+        
+        ## is error included?
+        if np.size(np.shape(data)) == 3:
+            erdata = data[1,:,:]
+            data = data[0,:,:]
+        
         if f == 0:
             alldata = np.zeros((len(files),data.shape[0],data.shape[1]),dtype=float)
+            allerror = np.zeros((len(files),data.shape[0],data.shape[1]),dtype=float)
+            allra,alldec = np.zeros(len(files),dtype=float),np.zeros(len(files),dtype=float)
             firsthead = head
+        allmed[f] = np.nanmedian(data) 
+        if method == 'absmedian': data /= allmed[f]
         alldata[f,:,:] = data
-    comb = np.median(alldata,axis=0)
-    fits.writeto(savefile,comb,header=firsthead,clobber=True)
+        
+                
+        if erfiles is not None: erhead,erdata = read_fits(erfiles[f])
+        if erdata is not None: allerror[f,:,:] = erdata
+        
+        if ra is None:
+            if 'RA' in head:
+                allra[f],alldec[f] = np.float(head['RA']),np.float(head['DEC'])
+        else:
+            allra[f],alldec[f] = ra[f],dec[f]
+
+    totalmed = np.nanmedian(allmed)
+    if method == 'absmedian': alldata*=totalmed
     
+    ## align
+    if align:
+        from astropy.coordinates import SkyCoord
+        positions = [SkyCoord(ira,idec,frame='fk5',unit='deg') for ira,idec in zip(allra,alldec)]
+        position1 = positions[0]
+
+        #minpixra,maxpixra = np.min(pixsepra),np.max(pixsepra)
+        #minpixdec,maxpixdec = np.min(pixsepdec),np.max(pixsepdec)
+  
+        for f in range(1,len(files)):
+            sepra,sepdec = position1.spherical_offsets_to(positions[f])
+            pixsepra = np.int(sepra.value/pixscale*3600/binning)
+            pixsepdec = np.int(sepdec.value/pixscale*3600/binning)
+            alldata[f,:,:] = shiftim(alldata[f,:,:],pixsepra,pixsepdec)
+            if erdata is not None:
+                allerror[f,:,:] = shiftim(allerror[f,:,:],pixsepra,pixsepdec)
+
+    if 'median' in method:            
+        comb = np.nanmedian(alldata,axis=0)
+        ercomb = np.zeros(comb.shape)
+        if erstd: ercomb = np.nanmedian(np.abs(comb-alldata),axis=0) #MAD
+        if erdata is not None: ercomb = np.sqrt(ercomb**2. + np.nanmedian(allerror,axis=0)**2.0)
+    elif method =='mean':
+        comb = np.nanmean(alldata,axis=0)
+        ercomb = np.zeros(comb.shape)
+        if erstd: ercomb = np.nanstd(alldata,axis=0) 
+        if erdata is not None: ercomb = np.sqrt(ercomb**2.0 + np.nanmean(allerror,axis=0)**2.0)
+    elif method == 'weighted':
+        if erdata is None: print("ERROR in combine_images: No erfiles passed!")
+        allerror[allerror == 0] = np.nan
+        comb = np.nansum(alldata/allerror**2.0,axis=0)/np.nansum(1.0/allerror**2.0,axis=0)
+        ercomb = np.nansum(1.0/allerror,axis=0)/np.nansum(1.0/allerror**2.0,axis=0)
+        if erstd: ercomb = np.sqrt(np.nanstd(alldata,axis=0)**2.0 + ercomb**2.0)
+        
+    if (erdata is not None):
+        fits.writeto(savefile,(comb,ercomb),header=firsthead,clobber=True)
+        return comb,ercomb
+    else:
+        fits.writeto(savefile,comb,header=firsthead,clobber=True)
+        return comb
+    
+        
 ## ----------------------------------------------------------------------
 ## --------------- MASTER BIAS ------------------------------------------
 ## -----------------------------------------------------------------------
@@ -2741,7 +2967,7 @@ def aperture_phot(image,errimage,mask,center,radpix=None,savefile=None):
                                      icenter[0]-rmax:icenter[0]+rmax])
         fw = np.sqrt(8*np.log(2))*0.5*(fit2g.x_stddev+fit2g.y_stddev)
         radpix = nsig*fw
-        print('      FWHM radius (%f sig): %f '%(nsig,optrad))
+        print('      FWHM radius (%f sig): %f '%(nsig,radpix))
     
     ##plot and ask user for best radius
     if radpix == None:
@@ -3150,6 +3376,133 @@ def field_psfphot(img,errimg,mask,savefile=None,sumfile=None,fwhm=5.0,threshold=
     
     return fread#x.reshape((len(x),1)),y.reshape((len(x),1)),phot.reshape((len(phot),1)),error.reshape((len(phot),1))
 
+## ----------------------------------------------------------------------
+## ---------- FUNCTION TO FIT ISOPHOT ELLIPSES TO GALAXY ---------------
+## ----------------------------------------------------------------------
+## PURPOSE: Fit elliptical model to galaxy (image should be combined and hopefully without strips)
+##          to obtain ultimately mask to get background polarization correction
+## INPUT: 1. savefile: full path+savefile of file to investigate
+##        2. center: x,y values as initial estimate
+##        3,4. ra, dec: Ra,Dec at center of image
+## OPTIONAL INPUT:
+##       - galradius: initial semimajor axis guess (in between min and max in pixel)
+##       - ellipticity: initial guess of ellipiticity
+##       - pa: initial position angle guess (degrees)
+## OUPUT: fit mask (largest ellipse) for background fit
+##        Creates plots of center position vs semimajor axis, intensity/total flux vs sma,
+##                         elliptical model and residual
+##        Creates file of fit result of ellipse model (use this last line to get mask)
+
+def galisophot(savefile,center,ra,dec,galradius=100.0,ellipticity=0.7,pa=140.0):
+
+    print("  Isophot for %s" %savefile)
+    sfile = savefile.replace('.fits','')
+
+    ## see if file already done
+    if os.path.exists(sfile+'-galmask.npy'):
+        fitmask,galradius = np.load(sfile+'-galmask.npy')
+        return fitmask,galradius
+
+    from photutils.isophote import EllipseGeometry, Ellipse
+    from photutils import EllipticalAperture
+    
+    ## read file
+    head,img = read_fits(savefile)
+    
+    ## mask for strip
+    #mask = (img > 0)
+    #image = np.ma.masked_array(img,mask=(~mask))
+    #image[~mask] = np.nan#median(image[mask])
+
+    ## interpolation for strip (mask does not work)
+    from scipy.interpolate import interp2d,RectBivariateSpline,SmoothBivariateSpline,griddata
+    image = np.zeros(img.shape,dtype=float)
+    ny,nx = img.shape
+    x,y = np.arange(0,nx),np.arange(0,ny)
+    xx,yy = np.meshgrid(x,y)
+    f2 = interp2d(x,[y[1000:1023],y[1042:1065]],[img[1000:1023,:],img[1042:1065,:]])
+    image = img.copy()
+    image[1023:1042,:] = f2(x,y[1023:1042])
+
+    ## initial ellipse estimate (rad=200, pa=140)
+    geometry = EllipseGeometry(x0=center[0],y0=center[1],sma=galradius,
+        eps=ellipticity,pa=pa*np.pi/180.)
+
+    ## to plot
+    aper = EllipticalAperture((geometry.x0, geometry.y0), geometry.sma,
+   	 	    geometry.sma*(1 - geometry.eps),geometry.pa)
+    lo,up = np.percentile(image.flatten(), 5),np.percentile(image.flatten(), 95)
+    plt.imshow(image, origin='lower',clim=(lo,up))
+    aper.plot(color='white')
+    plt.show()
+
+    # fit
+    ellipse = Ellipse(image, geometry)   
+    isolist = ellipse.fit_image(maxsma=700,fflag=0.4,maxgerr=1.0)
+    pdb.set_trace()
+    np.savetxt(sfile+'-galisophot.dat',(isolist.to_table()),fmt="%20s",
+    	header="RA=%f DEC=%f" %(ra,dec)+"\n sma intens intens_err ellipticity ellipticity_err pa pa_err "
+    	+"grad_rerr ndata flag niter stop_code")
+
+    # mask
+    bsma = len(isolist)-1
+    aper = EllipticalAperture((isolist[bsma].x0, isolist[bsma].y0), isolist[bsma].sma,
+   	 	              isolist[bsma].sma*(1 - isolist[bsma].eps),isolist[bsma].pa)
+    smask = aper.to_mask(method='center')[0].data
+    my,mx = smask.shape
+    cy,cx = np.int(aper.positions[0][0]),np.int(aper.positions[0][1])
+    fitmask = np.zeros(img.shape,dtype=bool)
+    fitmask[cy-my/2:cy+my/2,cx-mx/2:cx+mx/2] = smask
+    np.save(sfile+'-galmask.npy',(fitmask,np.int(isolist[bsma].sma)))
+    
+    # plot curve of growth
+    fig,(ax1,ax2) = plt.subplots(figsize=(14, 5), nrows=1, ncols=2)
+    ax1.errorbar(isolist.sma,isolist.intens,isolist.int_err,fmt='o')
+    ax1.set_xlabel('Semimajor axis (pix)')
+    ax1.set_ylabel('Mean intensity in ellipse')
+    ax2.scatter(isolist.sma,isolist.tflux_e/(np.pi*isolist.sma**2.0*(1.0-isolist.ellipticity)))
+    ax2.set_xlabel('Semimajor axis (pix)')
+    ax2.set_ylabel('Flux within ellipse/Area')
+    fig.savefig(sfile+'-galcurve.png')
+
+    # plot centers
+    fig,(ax1,ax2) = plt.subplots(figsize=(14, 5), nrows=1, ncols=2)
+    ax1.errorbar(isolist.sma,isolist.x0,isolist.x0_err,fmt='o')
+    ax1.set_xlabel("Semimajor axis (pix)")
+    ax1.set_ylabel("x0")
+    ax2.errorbar(isolist.sma,isolist.y0,isolist.y0_err,fmt='o')
+    ax2.set_xlabel("Semimajor axis (pix)")
+    ax2.set_ylabel("y0")
+    fig.savefig(sfile+'-galcenter.png')
+
+    #model image (not really needed)
+    from photutils.isophote import build_ellipse_model
+    model_image = build_ellipse_model(image.shape, isolist)
+    residual = image - model_image
+
+    #plot ellipses
+    fig, (ax1, ax2, ax3) = plt.subplots(figsize=(14, 5), nrows=1, ncols=3)
+    fig.subplots_adjust(left=0.04, right=0.98, bottom=0.02, top=0.98)
+    lo,up = np.percentile(image.flatten(), 5),np.percentile(image.flatten(), 95)
+    c = ax1.imshow(image, origin='lower',clim=(lo,up))
+    ax1.set_title('Data')
+    smas = np.linspace(10, np.max(isolist.sma), 10)
+    for sma in smas:
+        iso = isolist.get_closest(sma)
+        x, y, = iso.sampled_coordinates()
+        ax1.plot(x, y, color='white')
+
+    c2 = ax2.imshow(model_image, origin='lower',clim=(lo,up))#
+    ax2.set_title('Ellipse Model')
+
+    c3 = ax3.imshow(residual, origin='lower',clim=(lo,up))
+    ax3.set_title('Residual')
+    plt.savefig(sfile+'galisophot.png')
+   
+    plt.close("all")
+    return fitmask,np.int(isolist[bsma].sma)
+
+
 ## ---------------------------------------------------------------------
 ## ---------- FUNCTION TO BIN POINTS (clipped averge) ------------
 ## ---------------------------------------------------------------------
@@ -3371,9 +3724,32 @@ def centroid(matrix,mask,inicenter=None,radpix=50):
         #xc,yc = xc+inicenter[0]-radpix, yc+inicenter[1]-radpix
     return center
 
-
 ## -------------------------------------------------------------------------------
-## --------------------- ALIGN: FUNCTION to align two images interactively ------------
+## ------------------ ALIGN: simple aligh based on RAs/DECs assumed horiz/vert---
+## -------------------------------------------------------------------------------
+## PURPOSE:  Align two images interactively
+## INPUT:    1. image1: image to be aligned
+##           2. ra1,dec1: positions of reference
+##           3. ra2,dec2: positions of image
+## OPTIONAL INPUT:
+##           - pixscale (def: 0.126)
+##           - binning  (def: 2)
+##           - fill_val filling value for outside the shifting range (def:nan)
+## OUTPUT:   shifted image1
+
+def align(img,ra0,dec0,ra,dec,pixscale=0.126,binning=2,fill_val=np.nan):
+    
+    from astropy.coordinates import SkyCoord
+    pos = SkyCoord(ra0,dec0,frame='fk5',unit='deg')
+    newpos = SkyCoord(ra,dec,frame='fk5',unit='deg')
+    sepra,sepdec = newpos.spherical_offsets_to(pos)
+    pixsepra = np.int(sepra.value/pixscale*3600/binning)
+    pixsepdec = np.int(sepdec.value/pixscale*3600/binning)
+    newimg = shiftim(img,pixsepra,pixsepdec,fill_val=fill_val)
+    return newimg
+    
+## -------------------------------------------------------------------------------
+## --------------------- MANUALALIGN: FUNCTION to align two images interactively ------------
 ## -------------------------------------------------------------------------------
 ## PURPOSE:  Align two images interactively
 ## INPUT:    1. image1: image to be aligned
@@ -3384,7 +3760,7 @@ def centroid(matrix,mask,inicenter=None,radpix=50):
 ## --- These are auxiliary functions
 def onclick1(event):
     if event.button != 1:
-        print("     Stopping mouse interaction")
+        print("     Stopping mouse interaction, close window")
         global fig1,cid
         fig1.canvas.mpl_disconnect(cid)
     else:
@@ -3407,7 +3783,7 @@ def onclick2(event):
     return stars2    
 
 
-def align(shiftimg,refimg,savefile=None):
+def manualalign(shiftimg,refimg,savefile=None):
 
     ##Check if already done
     if (savefile is not None) & (os.path.isfile(savefile+'-align.fits')):
@@ -3560,16 +3936,20 @@ def read_fits(tfile):
 ## INPUT:    1. image
 ##           2. shift in x (pix)
 ##           3. shift in y (pix)
+## OPTIONAL:
+##          fill_val: filling value for outside the shifting range (def:nan)
 ## OUTPUT:   shited image
 
-def shiftim(img,xs,ys):
+def shiftim(img,xs,ys,fill_val=np.nan):
+
+    if (xs == 0) & (ys == 0): return img
     nx,ny = np.shape(img)
     nimg = np.roll(img,ys,axis=0)
     nimg = np.roll(nimg,xs,axis=1)
-    if xs > 0: nimg[:,0:xs] = np.NAN
-    elif xs < 0: nimg[:,nx+xs:nx] = np.NAN
-    if ys > 0: nimg[0:ys,:] = np.NAN
-    elif ys < 0:nimg[ny+ys:ny,:] = np.NAN
+    if xs > 0: nimg[:,0:xs] = fill_val
+    elif xs < 0: nimg[:,nx+xs:nx] = fill_val
+    if ys > 0: nimg[0:ys,:] = fill_val
+    elif ys < 0:nimg[ny+ys:ny,:] = fill_val
 
     return nimg
 
@@ -3847,7 +4227,7 @@ def separate_beams(data1,data2,savefile1=None,savefile2=None,default=True,dcount
     #beam,ebeam
     beam1,ebeam1 = np.zeros(np.shape(data1),dtype=float),np.zeros(np.shape(data1),dtype=float)
     mask1,emask1 = np.zeros(np.shape(data1),dtype=bool),np.zeros(np.shape(data1),dtype=bool)
-    beam2,ebeam2 = np.zeros(np.shape(data2),dtype='float'),np.zeros(np.shape(data2),dtype='float')
+    beam2,ebeam2 = np.zeros(np.shape(data2),dtype=float),np.zeros(np.shape(data2),dtype=float)
     mask2,emask2 = np.zeros(np.shape(data2),dtype=bool),np.zeros(np.shape(data2),dtype=bool)
     #beam1[:],ebeam1[:] = np.NAN,np.NAN#np.median(data1)#np.NAN
     #beam2[:],ebeam2[:] = np.NAN,np.NAN#np.median(data2)#np.NAN
@@ -3904,6 +4284,76 @@ def separate_beams(data1,data2,savefile1=None,savefile2=None,default=True,dcount
     return beam1,ebeam1,beam2,ebeam2#),(mask1,emask1,mask2,emask2)
 
 ## ------------------------------------------------------------------------------------
+## -----------READ_REFERENCE: Fct to read template images without pol and do astrometry
+## PURPOSE: Read file from headdata/template.dat
+## INPUT: path+file
+## OUTPUT: ref dict
+
+def read_reference(datadir,reffile,rawdir):
+
+    refname = '_refimage'
+    ## template file
+    if not os.path.isfile(reffile):
+        print(" WARNING: No template.dat file with reference images for astrometry")
+        refinfo = None
+    else:    
+        print(" Found template file %s: will use that" %reffile)
+        
+        # read like polfiles
+        reffiles = np.loadtxt(reffile,
+            dtype={'names':('file','galaxy','target','ra','dec',
+                            'filter','angle','exptime','mjd','chip','moon'),
+                   'formats':('O','O','O','f','f','O','f','f','f8','O','f')})
+        reffiles = reffiles[np.argsort(reffiles['mjd'])]
+        filters = np.unique(reffiles['filter'])
+        refinfo = np.zeros(len(filters),dtype={'names':('file','filter','ra','dec'),'formats':('O','O','f','f')})
+
+        for i,filt in enumerate(filters):
+            freffiles1 = reffiles[(reffiles['filter'] == filt) & (reffiles['chip'] == 'CHIP1')]
+            freffiles2 = reffiles[(reffiles['filter'] == filt) & (reffiles['chip'] == 'CHIP2')]
+            nffiles = len(freffiles1)
+            if len(freffiles2) != nffiles: 
+                print("Error in template.dat file")
+                raise
+
+            # already done (tempo?)
+            refinfo['file'][i] = datadir+filt+refname+'-merged.fits'
+            refinfo['filter'][i] = filt
+            refinfo['ra'][i] = freffiles1['ra'][0]
+            refinfo['dec'][i] = freffiles1['dec'][0]         
+
+            if os.path.isfile(datadir+filt+refname+'-merged.fits'): continue
+
+            for f in range(0,nffiles):
+                if nffiles > 1: extname = '_'+np.str(f)
+                else: extname='' 
+                
+                #Stick chips
+                h1,d1 = read_fits(rawdir+freffiles1['file'][f])
+                h2,d2 = read_fits(rawdir+freffiles2['file'][f])
+                ref_data12 = stick_chips(d1,d2,h1,h2,savefile=datadir+filt+refname+extname)
+
+                #Astrometry
+                ra,dec = freffiles1["ra"][f],freffiles1["dec"][f]
+                ref_head,ref_data = astrometry(ra,dec,datadir+filt+refname+extname+'-merged.fits',
+                                       outdir=datadir,outfile=filt+refname+extname+'-merged-astrom.fits')
+
+            #Align several files with same filter??
+
+            #Galfit
+
+        #refinfo = {}
+        #with open(reffile) as f:
+        #    content = f.readlines()
+        #    refinfo['file1'] = rawdir+content[0].split()[0]
+        #    refinfo['file2'] = rawdir+content[1].split()[0]
+        #refinfo['head1'],refinfo['data1'] = read_fits(refinfo['file1'])
+        #refinfo['head2'],refinfo['data2'] = read_fits(refinfo['file2'])
+        
+    return refinfo
+
+
+## ------------------------------------------------------------------------------------
 ## -----------READ_OFFSET: Fct to read offsets
 ## PURPOSE: Read offset file from headdata/observation.dat
 ## INPUT: path+file
@@ -3920,7 +4370,7 @@ def read_offset(offfile):
     #    print("No file with offset info: assuming no offsets were taken")
     
     if not os.path.isfile(offfile):
-        print("No file with offset info: assuming no offsets were taken")
+        print("No file with offset info: finding them automatically")
         offsetinfo = None
     else:    
         print("Found offset file %s: will use that" %offfile)
@@ -3931,7 +4381,7 @@ def read_offset(offfile):
                 line = line.strip()
                 arrsplit = line.split()
                 nsp = len(arrsplit)
-                offsetinfo[arrsplit[0]] = np.asarray(arrsplit[1:nsp],dtype=float)
+                offsetinfo[arrsplit[0]] = np.asarray(arrsplit[1:nsp],dtype=np.float32)
     return offsetinfo
 
 ## ------------------------------------------------------------------------------------
@@ -3945,11 +4395,13 @@ def read_offset(offfile):
 ##                         'observation.dat' has Filter and RA/DEC of each offset
 ##         files           File names within target folder
 ##         filter          Name of filter under consideration
+## OPTIONAL INPUT:
+##         dir              where to write auxiliary files
 ## OUTPUT: offset file with: 'ra' and 'dec' of each offset
 ##         and type 'off' (for offset) or 'it' (for iteration)
 
-def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
-
+def get_offset(offsetinfo,opolfiles,thisfilter,polangles,dir=dir):
+    
     if 'offit' not in opolfiles.dtype.names:
         from numpy.lib import recfunctions as rfn
         polfiles = rfn.append_fields(opolfiles,'offit',np.full(len(opolfiles),-1,dtype=int))
@@ -3966,18 +4418,34 @@ def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
         offset['ra'] = offsetinfo[thisfilter][0::2]
         offset['dec'] = offsetinfo[thisfilter][1::2]
         offset['type'] = 'off'
-
+        radec = [[o['ra'],o['dec']] for o in offset]
+        uradec,uind,ind,rep = np.unique(radec,axis=0,return_index=True,return_inverse=True,
+                                        return_counts=True)
+        nrep = rep[ind]
+           
     ## find offsets ourselves OR iterations with same offset
     else: 
-        radec = [[p['ra'],p['dec']] for p in polfiles]
-        uniqradec = np.unique(radec,axis=0)
+        fpolfiles = polfiles[polfiles['filter'] == thisfilter]
+        radec = [[p['ra'],p['dec']] for p in fpolfiles]
+        uniqradec = np.unique(radec,axis=0)#,return_index=True,return_inverse=True,return_counts=True)
         nuniqradec = len(uniqradec)
+        nrep = np.ones(nuniqradec)
         if nuniqradec > 1: #offset ourselves
             noffset = nuniqradec
             uniqradec = np.reshape(uniqradec,(noffset,2))
             offset = np.zeros(noffset,dtype=[('ra',float),('dec',float),('type',object)])
             offset['ra'],offset['dec'] = uniqradec[:,0], uniqradec[:,1]
             offset['type'] = 'off'
+        
+            ## write observation file
+            obsfile = open(dir+'observation_'+thisfilter+'.dat','w+')
+            obsfile.write("#Filter RA1 DEC1(pos1) RA2 DEC2(pos2)....\n")
+            linestr = ''
+            for i in range(0,len(uniqradec)):
+                linestr += ("%.8f %.8f " %(uniqradec[i,0],uniqradec[i,1]))
+            obsfile.write(linestr)
+            obsfile.close()
+            
 
         else: #iterations
             tfiles = polfiles['file'][(polfiles['angle'] == 67.5) &
@@ -3987,7 +4455,7 @@ def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
             offset = np.zeros(noffset,dtype=[('ra',float),('dec',float),('type',object)])
             offset['ra'],offset['dec'] = polfiles['ra'][0],polfiles['dec'][0]
             offset['type'] = 'it'
-  
+
     noffset = len(offset)
     if offset['type'][0] == 'off':
         for i in range(0,noffset):
@@ -4000,6 +4468,7 @@ def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
                                (np.isclose(polfiles['ra'],offset['ra'][i],rtol=tol)) &
                                (np.isclose(polfiles['dec'],offset['dec'][i],rtol=tol))]
 
+                        
             ##check for errors
             if ((offset['type'][i] == 'off') & (len(ffiles1) != len(polangles))):
                 medexptime,stdexptime = np.median(ffiles1['exptime']),np.std(ffiles1['exptime'])
@@ -4008,24 +4477,44 @@ def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
                     print(ffiles1['file'][(np.abs(ffiles1['exptime']-medexptime) > 0.5)])
                     pdb.set_trace()
                 else:
-                    print(" Warning: more files than expected with similar exposure time and position")
-                    print(ffiles1)
-                    docomb = raw_input(" Do you want to continue by doing a median image from all? (Y/N) ")
-                    if docomb.lower() == 'y':
-                        for tang in polangles:
-                            affiles1 = datadir+ffiles1[(ffiles1['angle'] == tang)]['file']
-                            affiles2 = datadir+ffiles2[(ffiles2['angle'] == tang)]['file']
-                            combine_images(affiles1,affiles1[0].replace('.fits','_med.fits'))
-                            combine_images(affiles2,affiles2[0].replace('.fits','_med.fits'))
-                        print(" You should now change your input filemap.dat and re-rerun. ")
-                        pdb.set_trace()
-                    else:    
-                        pdb.set_trace()
-
-            ## Assign offset
-            polfiles['offit'][(polfiles['filter'] == thisfilter) & 
-                              (np.isclose(polfiles['ra'],offset['ra'][i],rtol=tol)) &
-                              (np.isclose(polfiles['dec'],offset['dec'][i],rtol=tol))] = i
+                    if (nrep[i] > 1) & (len(ffiles1) == nrep[i]*len(polangles)):
+                        print(" Some files have repeated offset!")
+                        ti = np.argwhere(ind == ind[i]).reshape(-1)
+                        ni = np.sum(ti < i)
+                     
+                        ## Assign offset
+                        okvals = np.argwhere((polfiles['filter'] == thisfilter) & 
+                                  (np.isclose(polfiles['ra'],offset['ra'][i],rtol=tol)) &
+                                  (np.isclose(polfiles['dec'],offset['dec'][i],rtol=tol))).reshape(-1)
+                        polfiles['offit'][okvals[ni*2*len(polangles):(ni+1)*2*len(polangles)]] = i
+             
+                    else:
+                        if (len(ffiles1) > len(polangles)):
+                            print(" Warning: more files than expected with similar exposure time and position")
+                            print(ffiles1)
+                            docomb = raw_input(" Do you want to continue by doing a median image from all? (Y/N) ")
+                            if docomb.lower() == 'y':
+                                for tang in polangles:
+                                    affiles1 = dir+ffiles1[(ffiles1['angle'] == tang)]['file']
+                                    affiles2 = dir+ffiles2[(ffiles2['angle'] == tang)]['file']
+                                    pdb.set_trace()
+                                    if len(affiles1) > 0:
+                                        combine_images(affiles1,affiles1[0].replace('.fits','_med.fits'))
+                                        combine_images(affiles2,affiles2[0].replace('.fits','_med.fits'))
+                                print(" You should now change your input filemap.dat and re-rerun. ")
+                                pdb.set_trace()
+                            else:    
+                                pdb.set_trace()
+                        else:
+                            print(" Warning: less files than expected with similar exposure time and position")
+                            print(ffiles1)
+                            print(" You should probably get rid of these. ")
+                            pdb.set_trace()
+            else:
+                ## Assign offset
+                polfiles['offit'][(polfiles['filter'] == thisfilter) & 
+                                  (np.isclose(polfiles['ra'],offset['ra'][i],rtol=tol)) &
+                                  (np.isclose(polfiles['dec'],offset['dec'][i],rtol=tol))] = i
 
     elif offset['type'][0] == 'it':
 
@@ -4110,7 +4599,7 @@ def get_offset(offsetinfo,opolfiles,thisfilter,polangles):
 def prepare_folder(files, indir = None, outdir= None, target='NGC-3351', nocopy=False,
                    location='paranal'):
 
-    from moon import moon_illumination
+    from moon import moon_pol
     
     #dirs
     if indir == None:
@@ -4198,25 +4687,23 @@ def prepare_folder(files, indir = None, outdir= None, target='NGC-3351', nocopy=
 
                 #GET MOON ILLUMINATION
                 moon,mang,mQ,mU =\
-                       	moon_illumination(header['DATE-OBS'],header['RA'],header['DEC'],
-                                          location=location)
-                              #radecsys=header['RADECSYS'],location='paranal',
-                              #moon_ra=header['HIERARCH ESO TEL MOON RA'],
-                              # moon_dec=header['HIERARCH ESO TEL MOON DEC'])
+                       	moon_pol(header['DATE-OBS'],header['RA'],header['DEC'],
+                                 radecsys=header['RADECSYS'],location='paranal',
+                                 moon_ra=header['HIERARCH ESO TEL MOON RA'],
+                                 moon_dec=header['HIERARCH ESO TEL MOON DEC'])
                 filemap[i]['moon'] = np.str(round(moon,6))
                             
-        if ('CAFOS' in indir):
-            filemap[i]['target'] = header['OBJECT'].replace(' ','_')
-            if header['IMAGETYP'] == 'bias':
-                targname = 'BIAS'
-            elif header['IMAGETYP'] == 'flat':
-                targname = 'FLAT'
-            else: targname = header['OBJECT'].replace(' ','_')
-            filemap[i]['object'] = targname
-
-            if header['INSPOFPI'] != 'FREE':
-                filemap[i]['angle'] = str(round(header['INSPOROT'],1))
-            filemap[i]['filter'] = header['INSFLNAM']
+        #if ('CAFOS' in indir):
+        #    filemap[i]['target'] = header['OBJECT'].replace(' ','_')
+        #    if header['IMAGETYP'] == 'bias':
+        #        targname = 'BIAS'
+        #    elif header['IMAGETYP'] == 'flat':
+        #        targname = 'FLAT'
+        #    else: targname = header['OBJECT'].replace(' ','_')
+        #    filemap[i]['object'] = targname
+        #    if header['INSPOFPI'] != 'FREE':
+        #        filemap[i]['angle'] = str(round(header['INSPOROT'],1))
+        #    filemap[i]['filter'] = header['INSFLNAM']
                 
             
         #Write new fits file
@@ -4224,6 +4711,10 @@ def prepare_folder(files, indir = None, outdir= None, target='NGC-3351', nocopy=
             hdu.writeto(outdir+f, output_verify = 'ignore')
             hdu.close()
 
+    #Order per MJD
+    sort = np.argsort(filemap['mjdobs'])
+    filemap = filemap[sort]
+            
     #Save full map
     np.savetxt(indir+'fullmap.dat',(filemap),fmt='%20s')     
 
@@ -4282,8 +4773,53 @@ def prepare_folder(files, indir = None, outdir= None, target='NGC-3351', nocopy=
 # angle: 'INSPOROT' 
 # type: 'IMAGETYP' -science,bias
 
+
 ## ------------------------------------------------------------------------------
-## ---------------- SUM_OFFSETS ---------- ------------------------------
+## ---------------- COMBINE_OFFSETS --------------------------------------------
+## ------------------------------------------------------------------------------
+## PURPOSE: If several offsets for extended data of the same filter in the same night,
+##          then it combines all images (Q,U) to then calculate P,ang
+## INPUT:
+##       The files are read from the following information. 
+##       1. offset info
+##       2. filter string
+##       3. output path
+##       4. additional filename info
+## OUTPUT:
+##       The output is not returned but saved on file.
+def combine_offsets(offset,filt,outdir,savefile,center=None):
+
+    noffset = len(offset)
+  
+    ## Q
+    filename = [outdir+filt+'-'+offset['type'][i]+np.str(i)+savefile+'-QStokes.fits' for i in range(0,noffset)]
+    Q,erQ = combine_images(filename,outdir+filt+'-alloff'+savefile+'-QStokes.fits',align=True,
+                           erstd=True,method='absmedian',#'weighted',
+                           ra=offset['ra'],dec=offset['dec'])
+        
+    ## U
+    filename = [outdir+filt+'-'+offset['type'][i]+np.str(i)+savefile+'-UStokes.fits' for i in range(0,noffset)]
+    U,erU = combine_images(filename,outdir+filt+'-alloff'+savefile+'-UStokes.fits',align=True,
+                           method='absmedian',#'weighted',
+                           ra=offset['ra'],dec=offset['dec'])
+
+    ## Pol
+    pol,ang = QUpolarization(Q,U,filt,savefile=outdir+filt+'-alloff'+savefile,errQ=erQ,errU=erU)
+    ##plot variation of median vs offset?
+    
+    ## Errors
+    h0,erpol = read_fits(outdir+filt+'-alloff'+savefile+'-erpol0.fits')
+    h0,erangle = read_fits(outdir+filt+'-alloff'+savefile+'-erangle0.fits')
+
+    ## Plot
+    Qp,Up,Qm,Um = plotstokes(Q,U,savefile=outdir+filt+'-alloff'+savefile,
+                             scatter=('bin' in savefile),center=center)#x=x,y=y,
+    plotpol(pol,ang,center=center,savefile=outdir+filt+'-alloff'+savefile,
+            erpol=erpol,erangle=erangle)
+    
+
+## ------------------------------------------------------------------------------
+## ---------------- SUM_OFFSETS --------------------------------------------
 ## ------------------------------------------------------------------------------
 ## PURPOSE: If several offsets for field star data of the same filter/HWP-angle in the same night,
 ##          then it adds all stars to do pol/angle values
@@ -4371,7 +4907,7 @@ def sum_offsets(offset,filt,outdir,binpts=20,cosmic=False,posfree=False,center=N
                                        savefile=savefile+'-'+psf+'field-binpol'+xname,radpix=binpts)
     allanglemap,erallanglemap = bin_points(allx,ally,allangle,fullbin=True,center=center,sigmaclip=sigmaclip,
                                            savefile=savefile+'-'+psf+'field-binangle'+xname,radpix=binpts)
-    plotpol(allpolmap,allanglemap,erpol=erallpolmap,erangle=erallanglemap,
+    plotpol(allpolmap,allanglemap,erpol=erallpolmap,erangle=erallanglemap,polrange=[0.006,0.011],
             step=int(binpts/2),center=center,savefile=savefile+'-'+psf+'field-bin'+xname)       
     radius_dependence(allpolmap,allanglemap,savefile+'-'+psf+'field-bin'+xname,radfit=True,scatter=True,
                       parfit=parfit,erpol=erallpolmap,filt=filt)#,center=center)        
@@ -4775,7 +5311,7 @@ def analyse_filtphpol(filts,target,dir,fit=None):
         erfiltpsfpol[f],erfiltpsfang[f] = erpol*100,erangle
 
     ##read literature pol file
-    litfile = home+'/crisp/FORS2-POL/'+target+'/literature_'+target+'.dat'
+    litfile = home+'/crisp/FORS2-POL/Information/STDSTARS//literature_'+target+'.dat'
     litinfo = np.loadtxt(litfile,dtype={'names':('source','filter','pol','erpol','angle','erangle'),
                                         'formats':('O','O','f','f','f','f')})
     source = np.unique(litinfo['source']) 
@@ -4893,7 +5429,7 @@ def analyse_filtphpol(filts,target,dir,fit=None):
 ##   inla: perform INLA comparison (precalculated) def: False
 
 def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,inla=False,
-                      filt=None,pixscale=0.126,pixbin=2.0,radfit=True,parfit=False):
+                      filt=None,pixscale=0.126,pixbin=2.0,fitradius=None,radfit=True,parfit=False):
 
     print("   Plotting polarization vs radius ")   
     xi,xf,yi,yf = 188,1862,434,1965    
@@ -4905,19 +5441,25 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
     ax,ay,radius,allpol,allangle = xx.reshape(-1),yy.reshape(-1),rr.reshape(-1),pol.reshape(-1),angle.reshape(-1)
     if erpol is not None: allerpol = erpol.reshape(-1)
     else: allerpol = np.full(np.shape(allpol),0.0001)
-    ind = (np.where(allpol > 0))[0]#(np.where(np.nonzero(allpol) and np.isfinite(allpol)))[0]
+
+    mask = (allpol > 0)
+    ind = (np.where(mask))[0]
+    fitmask = mask.copy()
+    if fitradius is not None:
+        fitmask = (fitmask) & (rr > fitradius)
+    fitind = (np.where(fitmask))[0]
 
     ##limits
     lopol,uppol = np.percentile(allpol[ind],5),np.percentile(allpol[ind],95)
-    loang,upang = np.percentile(allangle[ind],5),np.percentile(allangle[ind],95)
-
+    loang,upang = np.percentile(allangle[ind],5),np.percentile(allangle[ind],95) 
+    
     if scatter:
-        uniq = (np.unique(allpol[ind],return_index=True))[1]
-        fx,fy = ax[ind[uniq]],ay[ind[uniq]]
-        frad,fpol,ferpol = radius[ind[uniq]],allpol[ind[uniq]],allerpol[ind[uniq]]
+        uniq = (np.unique(allpol[fitind],return_index=True))[1]
+        fx,fy = ax[fitind[uniq]],ay[fitind[uniq]]
+        frad,fpol,ferpol = radius[fitind[uniq]],allpol[fitind[uniq]],allerpol[fitind[uniq]]
     else:
-        fx,fy = ax[ind],ay[ind]
-        frad,fpol,ferpol = radius[ind],allpol[ind],allerpol[ind]
+        fx,fy = ax[fitind],ay[fitind]
+        frad,fpol,ferpol = radius[fitind],allpol[fitind],allerpol[fitind]
     
     ##fit
     if radfit:
@@ -5005,10 +5547,35 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
         medresrppol = np.median(resrppol[mask])
         stdresrppol = np.median(np.abs(resrppol[mask]-medresrppol))
         print("      Residual RotParaboloid median/MAD: %.4e,%.4e" %(medresrppol,stdresrppol)) 
-        fits.writeto(filename+'-polmodel.fits',rppol,clobber=True) 
-        np.savetxt(filename+'-polmodel.dat',(fitrppars,fiterrppars),fmt='%8e',
-                   header='RotParaboloid fit Pol parameters\nResidual median/MAD Pol: %.4e %.4e'
-                   %(medresrppol,stdresrppol))
+   
+        #- rotated paraboloid plus constant
+        crotparaboloid = lambda xy,a,b,theta,x0,y0,cst:\
+                        ((xy[0]-x0)*np.cos(theta)-(xy[1]-y0)*np.sin(theta))**2.0/a**2.0 + \
+                        ((xy[0]-x0)*np.sin(theta)+(xy[1]-y0)*np.cos(theta))**2.0/b**2.0 + cst
+        crpp0 = [1.0,1.0,0.0,0.0,0.0,0.0]
+        try:
+            fitcrppars,fitcrppcov = optimize.curve_fit(crotparaboloid,(fx,fy),fpol,
+                                                       p0=crpp0,sigma=ferpol)
+            fitercrppars = np.sqrt(np.diag(fitcrppcov))
+        except:
+            fitcrppars,fitercrppars = crpp0,np.zeros(len(crpp0))*np.nan
+        crrpolarr = crotparaboloid((xarr,yarr),*fitcrppars)
+        crppolarr = crotparaboloid((ax,ay),*fitcrppars)
+        crppol = crppolarr.reshape((ny,nx))
+        rescrppol = pol - crppol
+        #resrppol[mm] = np.nan
+        print("      CstRotParaboloid fit parameters: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitcrppars[0],fitcrppars[1],fitcrppars[2],fitcrppars[3],fitcrppars[4],fitcrppars[5]))
+        print("      CstRotParaboloid fit error parameters: %.4e,%.4e,%.4e,%.4e,%.4e,%.4e"
+              %(fitercrppars[0],fitercrppars[1],fitercrppars[2],fitercrppars[3],fitercrppars[4],fitercrppars[5]))
+        medrescrppol = np.median(rescrppol[mask])
+        stdrescrppol = np.median(np.abs(rescrppol[mask]-medrescrppol))
+        print("      Residual CstRotParaboloid median/MAD: %.4e,%.4e" %(medrescrppol,stdrescrppol)) 
+
+        fits.writeto(filename+'-polmodel.fits',crppol,clobber=True) 
+        np.savetxt(filename+'-polmodel.dat',(fitcrppars,fitercrppars),fmt='%8e',
+                   header='CstRotParaboloid fit Pol parameters\nResidual median/MAD Pol: %.4e %.4e'
+                   %(medrescrppol,stdrescrppol))
         
         #- elliptical paraboloid + plane
         #plane = lambda xy,a,b,c : a + b*xy[0] + c*xy[1]
@@ -5100,8 +5667,8 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
     if parfit:
         ax1.plot(x-center[1],np.median(ppol,axis=0),'-',color='yellow',label='Paraboloid fit')
         ax2.plot(y-center[0],np.median(ppol,axis=1),'-',color='yellow',label='Paraboloid fit')
-        ax1.plot(x-center[1],np.median(rppol,axis=0),'-',color='green',label='RotParaboloid fit')
-        ax2.plot(y-center[0],np.median(rppol,axis=1),'-',color='green',label='RotParaboloid fit')
+        ax1.plot(x-center[1],np.median(crppol,axis=0),'-',color='green',label='CstRotParaboloid fit')
+        ax2.plot(y-center[0],np.median(crppol,axis=1),'-',color='green',label='CstRotParaboloid fit')
         ax1.legend(fontsize='x-small')
     ax1.set_xlim([np.min(ax),np.max(ax)])
     ax2.set_xlim([np.min(ay),np.max(ay)])
@@ -5121,7 +5688,7 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
         HQhyp,Qhyp = read_fits(filename+"-Qmodel.fits")
         HUhyp,Uhyp = read_fits(filename+"-Umodel.fits")
         qupol,quang = polfct(Qhyp,Uhyp)
-        resqupol = pol - qupol
+        resqupol = -(pol - qupol) #OJO - binary
         medresqupol = np.median(resqupol[mask])
         stdresqupol = np.median(np.abs(resqupol[mask]-medresqupol))
         print("      Residual QU-POL (HypRotParaboloid) median/MAD: %.4e,%.4e" %(medresqupol,stdresqupol)) 
@@ -5144,7 +5711,7 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
                        verticalalignment='center', transform=axes[1].transAxes)
         axes[1].tick_params(labelsize=fs-2)
         loqupol,upqupol = np.percentile(resqupol[mask],5),np.percentile(resqupol[mask],95)
-        imres = axes[2].imshow(resqupol,clim=(loqupol,upqupol),cmap='binary')
+        imres = axes[2].imshow(resqupol,clim=(loqupol,upqupol),cmap='rainbow')#binary OJO
         axes[2].set(adjustable='box-forced', aspect='equal')
         axes[2].set_ylabel('y [pix]',fontsize=fs)
         axes[2].set_xlabel('x [pix]',fontsize=fs)
@@ -5182,7 +5749,7 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
         axes[0].text(0.75, 0.1, 'Polarization', horizontalalignment='center',fontsize=fs,
                        verticalalignment='center', transform=axes[0].transAxes)
         axes[0].tick_params(labelsize=fs-2)
-        im2 = axes[1].imshow(rppol,clim=(lopol,uppol),cmap='rainbow')
+        im2 = axes[1].imshow(crppol,clim=(lopol,uppol),cmap='rainbow')
         axes[1].set_ylabel('y [pix]',fontsize=fs)
         axes[1].set(adjustable='box-forced', aspect='equal')
         axes[1].invert_yaxis()
@@ -5190,9 +5757,9 @@ def radius_dependence(pol,angle,filename,center=None,scatter=False,erpol=None,in
                        verticalalignment='center', transform=axes[1].transAxes)
         axes[1].tick_params(labelsize=fs-2)
         ##mm = (np.isfinite(pol) & (pol > 0))
-        lorpol,uprpol = np.percentile(resrppol[mask],5),np.percentile(resrppol[mask],95)
+        lorpol,uprpol = np.percentile(rescrppol[mask],5),np.percentile(rescrppol[mask],95)
         #lorpol,uprpol = np.percentile(resrppol,1),np.percentile(resrppol,99)
-        imres = axes[2].imshow(resrppol,clim=(lorpol,uprpol),cmap='binary')
+        imres = axes[2].imshow(rescrppol,clim=(lorpol,uprpol),cmap='binary')
         axes[2].set(adjustable='box-forced', aspect='equal')
         axes[2].set_ylabel('y [pix]',fontsize=fs)
         axes[2].set_xlabel('x [pix]',fontsize=fs)

@@ -74,7 +74,7 @@ else:
 #read_inputfile(inputfile)
 ra,dec = None,None
 logfile = ''
-obj,target,date = '','',''
+obj,target,date,biasdate = '','','',''
 output = 'reduced'
 dobias,dogain,doflat,dofourier = False,False,False,False
 dopix,dobin,dophot,dofphot,dochrom = False,False,False,False,False
@@ -82,9 +82,11 @@ calcstrips,findstars,docosmic,bkg = False,False,False,False
 polbias,biasmethod = False,''
 cenpol,instpol = 'None','None'
 doradfit,doparfit,inla = False,False,False
+galfit,galfitradius = None,None
 rad_aper, noise_box = None,15
 dcountdy = 1000.0
 filters = ['u_HIGH','b_HIGH','v_HIGH','R_SPECIAL','I_BESS','H_Alpha','OII_8000']
+comboff,offsets = False,None
 
 for line in open(inputfile,'r'):
     if line[0] == '#': continue
@@ -93,11 +95,18 @@ for line in open(inputfile,'r'):
     if len(strdiv) <= 1: continue
     if 'OBJECT' in strdiv[0].upper(): obj = strdiv[1].upper()
     if 'TARGET' in strdiv[0].upper(): target = strdiv[1]
-    if 'DATE' in strdiv[0].upper(): date = strdiv[1]
+    if 'DATE:' == strdiv[0].upper(): date = strdiv[1]
+    if 'BIASDATE:' == strdiv[0].upper(): biasdate = strdiv[1]
     if 'OUTPUT' in strdiv[0].upper(): output = strdiv[1]
     if 'FILTERS' in strdiv[0].upper():
         filters = np.array(strdiv[1].split(','))
-    if 'BIAS' in strdiv[0].upper():
+    if 'OFFSETS:' == strdiv[0].upper():
+        if ('no' not in strdiv[1].lower()) and ('all' not in strdiv[1].lower()):
+            offsets = np.array(strdiv[1].split(','),dtype=int)
+    if 'COMBOFFSET:' == strdiv[0].upper():
+        if strdiv[1].lower() == 'yes': comboff = True
+        if strdiv[1].lower() == 'no': comboff = False
+    if 'BIAS:' == strdiv[0].upper():
         if strdiv[1].lower() == 'yes': dobias = True
         if strdiv[1].lower() == 'no': dobias = False
     if 'GAIN' in strdiv[0].upper():
@@ -171,9 +180,15 @@ for line in open(inputfile,'r'):
         if strdiv[1].lower() == 'no': inla = False    
     if 'FOURIER' in strdiv[0].upper():
         if strdiv[1].lower() == 'yes': dofourier = True
-        if strdiv[1].lower() == 'no': dofourier = False    
+        if strdiv[1].lower() == 'no': dofourier = False
+    if 'GALFIT:' == strdiv[0].upper():
+        if strdiv[1].lower() != 'none': galfit = strdiv[1]
+    if 'GALFITRADIUS:' == strdiv[0].upper():
+        if strdiv[1].lower() != 'none': galfitradius = np.float(strdiv[1])
+
 if obj == '': print("ERROR: NO OBJECT INPUT")
 if target == '': print("ERROR: NO TARGET INPUT")
+
 
 ##LOG FILE
 if logfile is not '':
@@ -203,28 +218,27 @@ if not os.path.isfile(datadir+'filemap.dat'):
 if not os.path.exists(outdir):
     os.makedirs(outdir)
 
-##--------- 1) REFERENCE NON-POL IMAGE
+## ------- 1) REFERENCE NON-POL IMAGE
+gfitmask = None
 if obj == 'GAL':
-    sys.exit("Need to load proper image")
-    ref_file1='FORS2.2017-04-03T02:24:42.014.fits'
-    ref_file2='FORS2.2017-04-03T02:24:42.015.fits'
-    refname = 'refimage'
+    refinfo = read_reference(outdir,datadir+'template.dat',rawdir)
 
-    ##-- Read reference files
-    ref_head1,ref_data1 = read_fits(datadir+ref_file1)
-    ref_head2,ref_data2 = read_fits(datadir+ref_file2)
-
-    ##-- Stick chips
-    ref_data12 = stick_chips(ref_data1,ref_data2,ref_head1,ref_head2,savefile=outdir+refname)
-
-    ##-- Astrometry
-    ra,dec = ref_head1["RA"],ref_head1["DEC"]
-    ref_head,ref_data = astrometry(ra,dec,outdir+refname+'-merged.fits',
-                                   outdir=outdir,outfile=refname+'-merged-astrom.fits')
-
+    ## GALFIT: get mask
+    if refinfo is not None:
+        for rfile in refinfo:
+            if galfit == 'ell':
+                print(" Finding galaxy elliptical isophot")
+                gfitmask,galfitradius = galisophot(rfile['file'],center,rfile['ra'],rfile['dec'])  
+            elif (galfit == 'circ') & (galfitradius is not None):
+                head,img = read_fits(rfile)
+                ny,nx = img.shape
+                xx,yy = np.meshgrid(np.arange(0,nx),np.arange(0,ny))
+                rr = np.sqrt(xx**2.0+yy**2.0)
+                gfitmask = (rr > galfitradius)
+                
 ## --Offset info 
 offsetinfo = read_offset(datadir+'observation.dat')
-   
+
 ##-------- 2) ALL POL IMAGES
 polfiles = np.loadtxt(datadir+'filemap.dat',
                       dtype={'names':('file','galaxy','target','ra','dec',
@@ -239,12 +253,14 @@ polangles = np.unique(polfiles['angle'])
 
 #%%%% Master Bias and gain
 if dogain or dobias:
-    if date == '': date = '/'+np.str(np.int(np.floor(polfiles['mjd'][0])))
-    mbias1,mbias2 = master_bias(date)
+    if biasdate == '':
+        if date == '': biasdate = '/'+np.str(np.int(np.floor(polfiles['mjd'][0])))
+        else: biasdate = '/'+date
+    mbias1,mbias2 = master_bias(biasdate)
     if dogain: ## NOT FINISHED!
         find_gain(date,mbias1,mbias2)
         sys.exit('stop')
-        
+
 #%%%% Loop over filters 
 for f in range(0,len(polfilters)):
 
@@ -255,9 +271,10 @@ for f in range(0,len(polfilters)):
     fname = polfilters[f]
 
     ## offset info & check number filter files 
-    offset,polfiles = get_offset(offsetinfo,polfiles,polfilters[f],polangles)
+    offset,polfiles = get_offset(offsetinfo,polfiles,polfilters[f],polangles,dir=datadir)
     noffset = len(offset)
-     
+    myoffsets = np.arange(noffset) if offsets is None else offsets
+ 
     ## FLAT: loop filters & offsets
     fpolfiles = polfiles[(polfiles['filter']==polfilters[f])]
     if doflat:
@@ -269,7 +286,7 @@ for f in range(0,len(polfilters)):
             
             ffiles1 = fpolfiles[(fpolfiles['chip'] == 'CHIP1') & (fpolfiles['offit'] == i)]
             ffiles2 = fpolfiles[(fpolfiles['chip'] == 'CHIP2') & (fpolfiles['offit'] == i)]
-        
+
             ## %%%% Polarimetry flat from data itself! This is a flat (per offset) to multiply ebeam
             retflat = data_flat(datadir+ffiles1['file'],datadir+ffiles2['file'],dobias=dobias,
                                 savefile=outdir+fname+gname,dobin=dobin,binsize=binsize,
@@ -295,7 +312,11 @@ for f in range(0,len(polfilters)):
 
         for i in range(0,noffset):
 
+
+            if i not in myoffsets: continue
+            
             print("   -- OFFSET/ITER: %i" %(i))
+            
             files1 = fpolfiles['file'][(fpolfiles['angle'] == polangles[a]) &
                                        (fpolfiles['filter'] == polfilters[f]) &
                                        (fpolfiles['chip'] == 'CHIP1') & (fpolfiles['offit'] == i)]
@@ -381,6 +402,7 @@ for f in range(0,len(polfilters)):
                 allbinbeam.append(binbeam);allbinebeam.append(binebeam)
                 allerbinbeam.append(errbinbeam);allerbinebeam.append(errbinebeam)
                 allbinmask.append(binmask);allbinemask.append(binemask)
+                del binbeam,binebeam,errbinbeam,errbinebeam,binmask,binemask
     
             ##-- Flat correction (pixel by pixel)
             if doflat:
@@ -409,6 +431,7 @@ for f in range(0,len(polfilters)):
                 ephot,ephoterr = psf_phot(ebeam,errebeam,emask,center,savefile=outdir+tname+'-ebeam') 
                 allpsfphot.append(phot);allpsfephot.append(ephot)
                 allerpsfphot.append(photerr);allerpsfephot.append(ephoterr)
+                del phot,ephot,photerr,ephoterr
 
              ##-- Photometry (field point sources)
             if dofphot:   
@@ -438,7 +461,7 @@ for f in range(0,len(polfilters)):
                                        savefile=outdir+tname+'-ebeam',sumfile=outdir+fname+gname)
                 allfieldphot.append(fphot);allfieldephot.append(fephot)
                 allafieldphot.append(faphot);allafieldephot.append(faephot)
-
+                del fphot,fephot,faphot,faephot
                 
             ##-- change beam for ebeam if ang>45
             #if angles[a] >=45:
@@ -454,13 +477,13 @@ for f in range(0,len(polfilters)):
 
             
             ## -- ALIGN SCIENCE AND REF IMAGES
-            #new_beam = align(beam,ref_data,savefile=outdir+tname+'-obeam-merged')
-            #new_ebeam = align(ebeam,ref_data,savefile=outdir+tname+'-ebeam-merged')
-
+            #new_beam = manualalign(beam,ref_data,savefile=outdir+tname+'-obeam-merged')
+            #new_ebeam = manualalign(ebeam,ref_data,savefile=outdir+tname+'-ebeam-merged')
             
             allbeam.append(beam);allebeam.append(ebeam)
             allerbeam.append(errbeam);allerebeam.append(errebeam)
             allmask.append(mask);allemask.append(emask)
+            del beam,ebeam,errbeam,errebeam,mask,emask
                 
         #%%%% End loop offsets
 
@@ -478,7 +501,7 @@ for f in range(0,len(polfilters)):
     ## -- POLARIZATION
     print(" ")
     print("Calculating polarization from following angles: "+str(polangles))
-
+        
     # arrays
     allbeam,allebeam = np.asarray(allbeam),np.asarray(allebeam)
     allerbeam,allerebeam = np.asarray(allerbeam),np.asarray(allerebeam)
@@ -497,9 +520,12 @@ for f in range(0,len(polfilters)):
         allafieldphot,allafieldephot = np.asarray(allafieldphot),np.asarray(allafieldephot)
 
     ##loop offsets
+    nmyoffsets,ii = len(myoffsets),-1
     for i in range(0,noffset):
-
+        
+        if i not in myoffsets: continue
         print("   -- OFFSET/ITER: %i" %(i))
+        ii += 1
         
         ##name
         fname = polfilters[f]
@@ -510,32 +536,39 @@ for f in range(0,len(polfilters)):
         tname = fname+gname+cname
    
         ##pick indices
-        ind = np.arange(i,len(polangles)*noffset,noffset,dtype=np.int)
+        ind = np.arange(ii,len(polangles)*nmyoffsets,nmyoffsets,dtype=np.int)
 
+        ##fitmask
+        fitmask = None
+        if gfitmask is not None:
+            fitmask = align(gfitmask,refinfo['ra'],refinfo['dec'],offset['ra'][i],offset['dec'][i],fill_val=False)
+                 
         ## -- Pixel polarization
         if dopix:
 
             print("   -----> Pixel polarization-")
             ##Stokes parameters
-            Q,U,erQ,erU = stokes(allbeam[ind],allebeam[ind],savefile=outdir+tname,
-                                 mask=allmask[ind],emask=allemask[ind],
-                                 errbeam=allerbeam[ind],errebeam=allerebeam[ind])
-        
+            stok = stokes(allbeam[ind],allebeam[ind],savefile=outdir+tname,
+                          mask=allmask[ind],emask=allemask[ind],
+                          errbeam=allerbeam[ind],errebeam=allerebeam[ind])
+            Q,U,erQ,erU = stok['Q'],stok['U'],stok['erQ'],stok['erU']
+            
             pol0,angle0 = QUpolarization(Q,U,polfilters[f])
-        
+               
             ##Plot and correct Stokes for center Q0/U0 and field instpol
             Q,U,QUcorr = QUcorrect(Q,U,savefile=outdir+tname,parfit=doparfit,corr=cenpol,#'med','cen'
-                                   errQ=erQ,errU=erU,center=center,fcorr=instpol,inla=inla,filt=fname)
+                                   errQ=erQ,errU=erU,center=center,fitmask=fitmask,
+                                   fcorr=instpol,inla=inla,filt=fname)
 
             ##Polarization from Q/U & error (first without central Q0/U0 corrections & without fieldcorr)
             if cenpol != 'None' or instpol != 'None':
                 polraw,angleraw = QUpolarization(QUcorr['Qraw'],QUcorr['Uraw'],polfilters[f])
                 plotpol(polraw,angleraw,center=center,savefile=outdir+tname,
-                        image=allbeam[ind[0]]+allebeam[ind[0]])
+                        image=allbeam[ind[0]]+allebeam[ind[0]],fitradius=galfitradius)
             if cenpol != 'None':
                 pol0,angle0 = QUpolarization(QUcorr['Qcencorr'],QUcorr['Ucencorr'],polfilters[f])
                 plotpol(pol0,angle0,center=center,savefile=outdir+tname+'-corr'+cenpol,
-                        image=allbeam[ind[0]]+allebeam[ind[0]])
+                        image=allbeam[ind[0]]+allebeam[ind[0]],fitradius=galfitradius)
             pol,angle = QUpolarization(Q,U,polfilters[f],errQ=erQ,errU=erU,
                                        savefile=outdir+tname+QUcorr['corrname'])
             pol,erpol,erangle = erpolarization(allbeam[ind],allebeam[ind],pol,angle,
@@ -546,7 +579,7 @@ for f in range(0,len(polfilters)):
 
             ##Plot polarization
             plotpol(pol,angle,center=center,erpol=erpol,erangle=erangle,savefile=outdir+tname+QUcorr['corrname'],
-                    image=allbeam[ind[0]]+allebeam[ind[0]])
+                    image=allbeam[ind[0]]+allebeam[ind[0]],fitradius=galfitradius)
 
             ##Plot pol/ang vs radius
             radius_dependence(pol,angle,outdir+tname+QUcorr['corrname'],radfit=doradfit,parfit=doparfit,
@@ -571,23 +604,26 @@ for f in range(0,len(polfilters)):
             print("   -----> Binned polarization-")
 
             ## From binned intensity maps: Stokes & Pol
-            binQ,binU,erbinQ,erbinU = stokes(allbinbeam[ind],allbinebeam[ind],
-                                             #mask=allbinmask[ind],emask=allbinemask[ind],
-                                             errbeam=allerbinbeam[ind],errebeam=allerbinebeam[ind],
-                                             savefile=outdir+tname+bname)
+            binstok = stokes(allbinbeam[ind],allbinebeam[ind],
+                             #mask=allbinmask[ind],emask=allbinemask[ind],
+                             errbeam=allerbinbeam[ind],errebeam=allerbinebeam[ind],
+                             savefile=outdir+tname+bname)
+            binQ,binU,erbinQ,erbinU = binstok['Q'],binstok['U'],binstok['erQ'],binstok['erU']
+
             ## Plot and correct Stokes for center Q0/U0 and field instpol
-            binQ,binU,binQUcorr = QUcorrect(binQ,binU,savefile=outdir+tname+bname,scatter=True,inla=inla,
-                                              center=center,errQ=erbinQ,errU=erbinU,corr=cenpol,#'med',
-                                              parfit=doparfit,fcorr=instpol,filt=fname)#'cen'Q0=Qc,U0=Uc,
+            binQ,binU,binQUcorr = QUcorrect(binQ,binU,savefile=outdir+tname+bname,scatter=True,
+                                            inla=inla,center=center,errQ=erbinQ,errU=erbinU,
+                                            fitmask=fitmask,corr=cenpol,#'med',
+                                            parfit=doparfit,fcorr=instpol,filt=fname)#'cen'Q0=Qc,U0=Uc,
             ##Polarization from Q/U & error (first without central Q0/U0 corrections & without fieldcorr)
             if cenpol != 'None' or instpol != 'None':
                 binpolraw,binangleraw = QUpolarization(binQUcorr['Qraw'],binQUcorr['Uraw'],polfilters[f])
                 plotpol(binpolraw,binangleraw,step=binsize,image=allbeam[ind[0]]+allebeam[ind[0]],
-                        center=center,savefile=outdir+tname+bname)
+                        center=center,savefile=outdir+tname+bname,fitradius=galfitradius)
             if cenpol != 'None':
                 binpol0,binangle0 = QUpolarization(binQUcorr['Qcencorr'],binQUcorr['Ucencorr'],polfilters[f])
                 plotpol(binpol0,binangle0,step=binsize,image=allbeam[ind[0]]+allebeam[ind[0]],
-                        center=center,savefile=outdir+tname+bname+'-corr'+cenpol)
+                        center=center,savefile=outdir+tname+bname+'-corr'+cenpol,fitradius=galfitradius)
             binpol,binangle = QUpolarization(binQ,binU,polfilters[f],errQ=erbinQ,errU=erbinU,
                                              savefile=outdir+tname+bname+binQUcorr['corrname'])
             binpol,erbinpol,erbinangle = erpolarization(allbinbeam[ind],allbinebeam[ind],
@@ -605,7 +641,7 @@ for f in range(0,len(polfilters)):
             ## BEFORE: Bin Q and U instead of intensity maps (not right!)
                         
             #plot bin polarization
-            plotpol(binpol,binangle,erpol=erbinpol,erangle=erbinangle,
+            plotpol(binpol,binangle,erpol=erbinpol,erangle=erbinangle,fitradius=galfitradius,
                     step=binsize,image=allbeam[ind[0]]+allebeam[ind[0]],
                     center=center,savefile=outdir+tname+bname+binQUcorr['corrname'])
 
@@ -623,25 +659,31 @@ for f in range(0,len(polfilters)):
 
             print("   -----> Star (photometry) polarization-")
             #aperture
-            apQ,apU,erapQ,erapU = stokes(allphot[ind],allephot[ind],
+            apstok  = stokes(allphot[ind],allephot[ind],
                                          errbeam=allerphot[ind],errebeam=allerephot[ind])
+            apQ,apU,erapQ,erapU = apstok['Q'],apstok['U'],apstok['erQ'],apstok['erU']
+
             apQ,apU,apQUcorr = QUcorrect(apQ,apU,savefile=outdir+tname+'_aper',
-                                corr='given',Q0=Qc,U0=Uc,errQ=erapQ,errU=erapU)
+                                         corr='given',Q0=Qc,U0=Uc,errQ=erapQ,errU=erapU)
             ###correction depends on position!!
             appol,apangle = QUpolarization(apQ,apU,polfilters[f],errQ=erapQ,errU=erapU,
                                          chrom=dochrom)
             appol,erappol,erapangle = erpolarization(allphot[ind],allephot[ind],
                                                      appol,apangle,bias=polbias,method=biasmethod,
                                                      errbeam=allerphot[ind],errebeam=allerephot[ind])
+            apstok['Q'],apstok['erQ'],apstok['U'],apstok['erU'] = apQ,erapQ,apU,erapU
+            apstok['pol'],apstok['angle'] = appol,apangle
+            apstok['erpol'],apstok['erangle'] = erappol,erapangle
+            
             write_photfile(outdir+tname+'_aper',allphot[ind],allephot[ind],
-                           allerphot[ind],allerephot[ind],appol,erappol)
+                           allerphot[ind],allerephot[ind],apstok)
             print("Iter/offset %i: APER-phot polarization %f and angle %f"
                   %(i,appol,apangle))
                
             #psf
-            psfQ,psfU,erpsfQ,erpsfU = stokes(allpsfphot[ind],allpsfephot[ind],
-                                             errbeam=allerpsfphot[ind],
-                                             errebeam=allerpsfephot[ind])
+            psfstok = stokes(allpsfphot[ind],allpsfephot[ind],
+                             errbeam=allerpsfphot[ind],errebeam=allerpsfephot[ind])
+            psfQ,psfU,erpsfQ,erpsfU = psfstok['Q'],psfstok['U'],psfstok['erQ'],psfstok['erU']
             psfQ,psfU,psfQUcorr = QUcorrect(psfQ,psfU,savefile=outdir+tname+'_psf',
                                               corr='given',Q0=Qc,U0=Uc,errQ=erpsfQ,errU=erpsfU)
             psfpol,psfangle = QUpolarization(psfQ,psfU,polfilters[f],chrom=dochrom,
@@ -650,8 +692,12 @@ for f in range(0,len(polfilters)):
                                                         psfpol,psfangle,method=biasmethod,
                                                         errbeam=allerpsfphot[ind],bias=polbias,
                                                         errebeam=allerpsfephot[ind])
+            psfstok['Q'],psfstok['erQ'],psfstok['U'],psfstok['erU'] = psfQ,erpsfQ,psfU,erpsfU
+            psfstok['pol'],psfstok['angle'] = psfpol,psfangle
+            psfstok['erpol'],psfstok['erangle'] = erpsfpol,erpsfangle
+            
             write_photfile(outdir+tname+'_psf',allpsfphot[ind],allpsfephot[ind],
-                           allerpsfphot[ind],allerpsfephot[ind],psfpol,erpsfpol)
+                           allerpsfphot[ind],allerpsfephot[ind],psfstok)
             print("Iter/offset %i: PSF-phot polarization %f and angle %f"
                       %(i,psfpol,psfangle))
 
@@ -690,9 +736,10 @@ for f in range(0,len(polfilters)):
             print("   -----> Field star (PSF photometry) polarization-")
             
             ## Polarization of field stars
-            fQ,fU,erfQ,erfU = stokes(fphot,fephot,errbeam=erfphot,errebeam=erfephot,
-                                     #mask=pamask,emask=pamask,
-                                     savefile=outdir+tname+'-psffield')
+            fstok = stokes(fphot,fephot,errbeam=erfphot,errebeam=erfephot,
+                           #mask=pamask,emask=pamask,
+                           savefile=outdir+tname+'-psffield')
+            fQ,fU,erfQ,erfU = fstok['Q'],fstok['U'],fstok['erQ'],fstok['erU']
             fQ,fU,fQUcorr = QUcorrect(fQ,fU,savefile=outdir+tname+'-psffield',center=center,
                                       scatter=True,corr=cenpol,errQ=erfQ,errU=erfU,#Q0=binQc,U0=binUc,
                                       parfit=doparfit,fcorr=instpol,filt=fname,x=xsrc,y=ysrc)
@@ -786,8 +833,9 @@ for f in range(0,len(polfilters)):
                 
       
             ## Polarization of field stars
-            faQ,faU,erfaQ,erfaU = stokes(faphot,faephot,errbeam=erfaphot,errebeam=erfaephot,
-                                         savefile=outdir+tname+'-apfield')#mask=pamask,emask=pamask,
+            fastok= stokes(faphot,faephot,errbeam=erfaphot,errebeam=erfaephot,
+                           savefile=outdir+tname+'-apfield')#mask=pamask,emask=pamask,
+            faQ,faU,erfaQ,erfaU = fastok['Q'],fastok['U'],fastok['erQ'],fastok['erU']
             faQ,faU,faQUcorr = QUcorrect(faQ,faU,savefile=outdir+tname+'-apfield',center=center,
                                           scatter=True,corr=cenpol,errQ=erfaQ,errU=erfaU,#Q0=binQc,U0=binUc,
                                           parfit=doparfit,fcorr=instpol,filt=fname,x=axsrc,y=aysrc)
@@ -880,7 +928,15 @@ for f in range(0,len(polfilters)):
                 compare_polangle(fpol,fangle,fapol,faangle,outdir+tname+'-field',xtit='PSF',ytit='AP')#,mask=pamask)
                 compare_polangle(fpolmap,fanglemap,fapolmap,faanglemap,outdir+tname+'-field-bin',
                                  xtit='PSF',ytit='AP')
-            
+
+    #combine offsets
+    if comboff and noffset > 1:
+        if dopix:
+            combine_offsets(offset,polfilters[f],outdir,cname+QUcorr['corrname'],center=center)
+        if dobin:
+            combine_offsets(offset,polfilters[f],outdir,cname+bname+binQUcorr['corrname'],
+                            center=center)
+                
     #average offsets
     if dophot and noffset > 1 and offset['type'][0] == 'it':
         average_iterations('aper',offset,polangles,outdir,fname,cname)
@@ -907,6 +963,8 @@ for f in range(0,len(polfilters)):
                     method=biasmethod,binpts=20,sigmaclip=2.0,parfit=doparfit,xname=faQUcorr['corrname'])#,posfree=posfree,
         
 #%%%% End filter loop    
+
+
 
 ## --PLOT MOON (wave independent for now)
 from moon import *
